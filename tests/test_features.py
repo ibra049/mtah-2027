@@ -229,7 +229,7 @@ def test_regime_descriptors(seq, XN):
     col = {n: X[:, i] for i, n in enumerate(names)}
     miss = np.isnan(seq.ball[:, 0])
     reg = [n for n in names if n.startswith("n_reg_")]
-    assert len(reg) == 8
+    assert len(reg) == 9
     for n in reg:
         assert (col[n] == col[n][0]).all()                 # one value per half
     assert col["n_reg_miss"][0] == pytest.approx(miss.mean(), abs=1e-4)
@@ -302,3 +302,36 @@ def test_objects_far_outside_the_pitch_are_ignored(seq, XN):
     s2.home[:, K] = (0.0, 35.0)
     X3, _ = features.compute(s2)
     assert X3[0, names.index("h_touch")] == pytest.approx(-1.0, abs=1e-3)
+
+
+def test_relative_kinematics_have_a_twin_for_every_raw_column(seq, XN):
+    """Speeds in units of the half's own scale equal raw / scale, and every absolute-unit
+    kinematic column listed in RAW_KINEMATICS has such a twin (so it can be dropped)."""
+    import re
+    X, names = XN
+    col = dict(zip(names, X.T))
+    assert col["n_sp_mean_rel"][300] == pytest.approx(col["n_sp_mean"][300] / col["n_reg_spscale"][0], abs=2e-4)
+    assert col["d_blockv_rel"][300] == pytest.approx(col["d_blockv"][300] / col["n_reg_spscale"][0], abs=2e-4)
+    raw = [n for n in names if any(re.search(p, n) for p in features.RAW_KINEMATICS)]
+    assert len(raw) > 30
+    for n in raw:                                   # every raw column has its relative twin
+        base = re.sub(r"(_[pf]\d+)?$", "", n)
+        tail = n[len(base):]
+        assert base + "_rel" + tail in names, n
+
+
+def test_feature_versions(seq):
+    X2, n2 = features.compute(seq, version=2)
+    X3, n3 = features.compute(seq, version=3)
+    assert n2 == n3
+    with pytest.raises(ValueError):
+        features.compute(seq, version=1)
+    col2, col3 = dict(zip(n2, X2.T)), dict(zip(n3, X3.T))
+    # version 2: every tracked object counts; version 3 ignores the ones far outside the pitch
+    raw = (~np.isnan(seq.home[..., 0])).sum(1) + (~np.isnan(seq.away[..., 0])).sum(1)
+    assert col2["n_reg_players"][0] == pytest.approx(raw.mean(), abs=1e-4)
+    assert col3["n_reg_players"][0] < col2["n_reg_players"][0]
+    # both stay exactly team-symmetric
+    for v, X in ((2, X2), (3, X3)):
+        np.testing.assert_array_equal(features.compute(features.swap_seq(seq), v)[0],
+                                      features.swap_features(X, n2))
