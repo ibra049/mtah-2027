@@ -87,4 +87,83 @@ spellF1 over matches; choice by minimax regret over the views on a coarse grid, 
 the plateau. A component is kept only if its paired gain is ≥ +0.01 on the mean and non-negative on
 at least 4 of 5 matches. Nothing is tuned on the target or its public ground truth.
 
-Results: see the tables at the end of this file (filled by `scripts/decoder_bench.py`).
+## Results (external data only; `scripts/decoder_bench.py table|grid|compare|stats`)
+
+Family = mean official spellF1 over the label views 0 / 0.5 / 1.0 s and the 5 non-holdout DFL
+matches, out-of-fold probabilities, seeds 0 and 1 averaged. Every row uses the same degraded input.
+
+### Each variant against the official smooth50 baseline (model `lgb_v1`)
+
+| variant | nominal | harsh | pred/true possessions | paired vs row above |
+|---|---|---|---|---|
+| official baseline (nearest player, smooth50) | 0.2165 | 0.1781 | 1.51 | |
+| model, per-frame argmax | 0.4284 | 0.3157 | 1.72 | +0.212, 5/5 |
+| model, probability mean over ±25 frames | 0.6248 | 0.5993 | 0.75 | +0.196, 5/5 |
+| model, probability mean over ±50 frames | 0.5867 | 0.5664 | 0.63 | −0.038, 0/5 |
+| segment search, switch cost only | 0.6397 | 0.6021 | 0.78 | +0.015 vs ±25, 5/5 |
+| + minimum dead stretch | 0.6439 | 0.6105 | 0.76 | +0.004, 4/5 |
+| + controlled possession (`min_poss`) = **v1** | 0.6469 | 0.6161 | 0.74 | +0.003, 5/5 |
+
+Metrica sample games (the target provider's own possession semantics; a veto set, never tuned
+on): baseline 0.268, probability mean ±25 0.638, switch cost only 0.640, v1 0.658.
+
+The two minimum durations together are worth +0.007 on nominal, +0.014 on harsh and +0.018 on
+Metrica, non-negative on every match. They are below the +0.01 bar on nominal alone and were kept
+as the protection against a noisier model, which is the likelier direction on the target.
+
+### Parameter plateau (nominal grid, `lgb_v1`)
+
+| parameter | values tried → family (marginal mean) | frozen |
+|---|---|---|
+| `switch_cost` | 1000 → 0.636, 2000 → 0.641, 4000 → 0.643, 8000 → 0.637 | 3000 |
+| `min_poss` (frames) | 1 → 0.637, 6 → 0.637, 12 → 0.639, 19 → 0.642, 25 → 0.642, 31 → 0.639, 50 → 0.619 | 19 |
+| `min_dead` (frames) | 1 → 0.637, 25 → 0.639, 50 → 0.642, 75 → 0.642, 100 → 0.640 | 50 |
+
+The worst-case regret of the frozen configuration over the three label views is 0.002 on nominal
+and 0.003 on harsh. The surface is flat: every configuration inside the plateau is within 0.003.
+
+### Components tested and not adopted (paired rule, 5 matches)
+
+| component | mean gain (nominal) | matches non-negative |
+|---|---|---|
+| onset-aware switch cost (`onset_gain` 100) | +0.004 | 5/5 |
+| snap team changes to the onset peak (±12 frames) | +0.003 | 4/5 |
+| both, with switch cost 6000 | +0.006 | 5/5 |
+| separate costs for team changes and dead-ball boundaries | +0.000 | 3/5 |
+| timing offsets (median latency is already 0 / −1 / 0 frames) | −0.000 | 2/5 |
+| dead-ball bias ±300 | −0.001 | 2/5 |
+| hard minimum durations inside the search instead of steps 4-5 | −0.003 | 0/5 |
+| pruning of short low-margin possessions | −0.008 | 1/5 |
+| Smart Tagging priors on simulated tags (restart, team, both; nominal and harsh tag noise; measured with `lgb_v2`) | −0.001 … +0.000 | 1–4/5 |
+
+Tag priors were also tried with clean simulated tags and with four times the weight; the gain
+stayed within ±0.002 and stronger weights lost. The reason is visible in the error analysis: the
+restart a set-piece tag announces is already found (about 90% of stops and restarts are matched
+within one second), and a phase tag agrees with the true owner on about two frames in three,
+which is less than the model already knows. The submission is therefore decoded without tags.
+
+### Model `lgb_v2` (adds the stoppage profile; select = mean of nominal and stoppage)
+
+| decoder | nominal | stoppage | select | harsh | Metrica nominal | Metrica harsh |
+|---|---|---|---|---|---|---|
+| official baseline (smooth50) | 0.2165 | 0.2665 | 0.2415 | 0.1781 | 0.268 | |
+| `configs/decoder.json` (switch cost 3000) | 0.6730 | 0.6842 | 0.6786 | 0.6270 | 0.7110 | 0.6592 |
+| `configs/decoder_v2.json` (switch cost 4500) | 0.6739 | 0.6855 | 0.6797 | 0.6307 | 0.7102 | 0.6648 |
+
+The grid was rerun on `lgb_v2` over nominal and stoppage together (75 configurations). The
+minimax-regret configuration is again 3000 / 19 / 50; the minimum dead stretch does not move
+under the stoppage profile (plateau 50–75 frames). Only the switch-cost plateau shifts, to
+3000–6000 (4500–9000 on harsh), because the v2 team probabilities flip faster; 4500 is its centre.
+The difference between the two files is inside the noise (+0.001 select, +0.004 harsh) and was
+made for centrality, not for score. The onset options were retested on v2's onset output and
+stayed below the bar (−0.001 … +0.004).
+
+### Where the remaining loss is (view 0.5 s, `lgb_v1`)
+
+- Perfect timing of every boundary the decoder already places: +0.02. Perfect alive/dead: +0.01.
+- Team changes: 40% of the true ones are matched within one second; stops and restarts: 90%.
+- Recall at IoU 0.5 by true possession length: under 1 s 5%, 1–2 s 25%, 2–5 s 53%, 5–15 s 78%,
+  over 15 s 92%. A third of true possessions are shorter than 2 s.
+
+The decoder is within about 0.02 of what the probabilities allow; further gains come from the
+model detecting short possessions.
