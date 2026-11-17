@@ -334,3 +334,14 @@ def test_dead_run_stats():
     assert s["n_dead_inner"] == 3
     assert s["dead_lt3s"] == "0.3333" and s["dead_lt5s"] == "0.6667" and s["dead_lt8s"] == "0.6667"
     assert s["dead_per_min"] == f"{3 / (len(codes) / fps / 60):.4f}"
+
+
+def test_static_stretches():
+    from mtah.tracking_audit import static_stretches
+    T = 400
+    tr = np.cumsum(np.full((T, 2), 0.5), axis=0)        # moving 0.5 m/frame
+    tr[100:260] = [10.0, 10.0]                          # 160 static frames
+    tr[260:270] = np.nan
+    tr[300:330] = [5.0, 5.0]                            # 30 static frames (too short)
+    out = static_stretches(tr, 125, 0.2)
+    assert out == [(99, 260)] or out == [(100, 260)]
