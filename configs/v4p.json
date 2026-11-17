@@ -1,0 +1,14 @@
+{
+  "_doc": "Candidate v4p: lgb_v4 frame model + temporal stacker on the frame model's own outputs (probabilities and team-change onset; no ball cues, no nearest-player margin) (mtah.model_stacked over models/lgb_v4; artefact fitted on v4's leave-one-match-out out-of-fold probabilities, docs/stacker.md) + frozen decoder, kickoff rule on.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {
+    "module": "mtah.model_stacked",
+    "artefact": "models/stack_lgb_v4p"
+  },
+  "decoder": {
+    "module": "mtah.decode",
+    "cfg_path": "configs/decoder.json"
+  }
+}

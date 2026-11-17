@@ -79,14 +79,20 @@ Family = mean official spellF1 over the label views 0 / 0.5 / 1.0 s.
 
 ### On `lgb_v1` (the frame model that transfers cleanly to the target)
 
-| data | plain v1 | + stacker, standard | + stacker, outputs only |
-|---|---|---|---|
-| DFL nominal (5 matches) | 0.6469 | 0.6729 (+0.026, 5/5) | 0.6697 (+0.023, 5/5) |
-| DFL harsh | 0.6161 | 0.6348 (+0.019, 5/5) | 0.6300 (+0.014, 5/5) |
-| Metrica nominal (3 games) | 0.6575 | 0.6677 (+0.010, 2/3) | 0.6910 (+0.034, 3/3) |
-| Metrica harsh | 0.6088 | 0.6175 (+0.009, 3/3) | 0.6436 (+0.035, 3/3) |
-| Metrica nominal, low jitter | 0.6740 | 0.6982 (+0.024, 2/3) | 0.7137 (+0.040, 3/3) |
-| Metrica stoppage, low jitter | 0.7115 | 0.7456 (+0.034, 3/3) | 0.7487 (+0.037, 3/3) |
+| data | plain v1 | + stacker, standard | + outputs only | + probabilities only |
+|---|---|---|---|---|
+| DFL nominal (5 matches) | 0.6469 | 0.6729 (+0.026, 5/5) | 0.6697 (+0.023, 5/5) | 0.6570 (+0.010, 5/5) |
+| DFL harsh | 0.6161 | 0.6348 (+0.019, 5/5) | 0.6300 (+0.014, 5/5) | 0.6247 (+0.009, 4/5) |
+| Metrica nominal (3 games) | 0.6575 | 0.6677 (+0.010, 2/3) | 0.6910 (+0.034, 3/3) | 0.6835 (+0.026, 3/3) |
+| Metrica harsh | 0.6088 | 0.6175 (+0.009, 3/3) | 0.6436 (+0.035, 3/3) | 0.6342 (+0.025, 3/3) |
+| Metrica nominal, low jitter | 0.6740 | 0.6982 (+0.024, 2/3) | 0.7137 (+0.040, 3/3) | 0.6914 (+0.017, 3/3) |
+| Metrica stoppage, low jitter | 0.7115 | 0.7456 (+0.034, 3/3) | 0.7487 (+0.037, 3/3) | 0.7384 (+0.027, 3/3) |
+| outputs only with the onset input forced to 0, Metrica nominal | | | 0.6199 (−0.038 vs v1) | n/a |
+
+The probabilities-only stacker (`models/stack_lgb_v1q`, `configs/v1q.json`) keeps about half of
+the outputs-only gain, and it is the half that depends only on inputs that are in range on the
+target. With the onset input silenced, the outputs-only stacker falls below the plain frame
+model on every Metrica draw (−0.03 to −0.05), so it is not used with `lgb_v1`.
 
 The standard set is 0.003 better on DFL nominal but loses most of its gain on the Metrica games,
 through the alive/dead decision (alive-dead F1 0.953 → 0.943): the ball cues it learned on the
