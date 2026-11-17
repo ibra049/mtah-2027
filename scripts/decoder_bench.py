@@ -7,6 +7,7 @@ matches are never read here.
 
     PYTHONPATH=src python scripts/decoder_bench.py table  --model lgb_v1 [--cfg configs/decoder.json]
     PYTHONPATH=src python scripts/decoder_bench.py grid   --model lgb_v1
+    PYTHONPATH=src python scripts/decoder_bench.py compare --model lgb_v1 --a CFG_A --b CFG_B
     PYTHONPATH=src python scripts/decoder_bench.py export --model lgb_v1 --cfg CFG --name decoder_v1
     PYTHONPATH=src python scripts/decoder_bench.py synth  [--name synth_v1]
 
@@ -19,6 +20,7 @@ table   the decoder variants, each against the official smooth50 baseline comput
         (mean family gain >= +0.01 and non-negative on >= 4 of 5 matches) against the row above.
 grid    coarse grid over at most four parameters; choice by minimax regret over the label views,
         then the centre of the plateau (mean worst-regret of a config and its grid neighbours).
+compare the paired adoption rule for config B against config A (json strings or files).
 export  write label predictions in the layout scripts/eval_external.py reads.
 synth   stand-in probabilities built from the fine labels with bursty errors, blurred boundaries
         and lower confidence where the degraded ball is missing (until real OOF files exist).
@@ -41,6 +43,7 @@ EXT = Path.home() / "mtah-external"
 ROOT = Path(__file__).resolve().parents[1]
 OOF5 = ["J03WMX", "J03WN1", "J03WOH", "J03WOY", "J03WPY"]
 PROFILES = ("nominal", "harsh")
+TAG_ROOT = "cache_tags_v2"       # simulated Smart Tagging with the target's window structure
 SEEDS = (0, 1)
 FPS = 25
 
@@ -69,7 +72,7 @@ def label_views(raw, taus):
 
 
 def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
-    """{(profile, seed): {match: [(proba, aux, tags) per half]}} for complete matches only."""
+    """{(profile, seed): {match: [(proba, aux, tags, ball) per half]}}, complete matches only."""
     data, missing = {}, []
     for profile in profiles:
         for seed in seeds:
@@ -89,11 +92,13 @@ def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
                     if fa.exists():
                         with np.load(fa) as z:
                             aux = {k: z[k] for k in z.files if k != "frame"}
-                    tg = None
+                    tg = ball = None
                     if tags:
-                        ft = EXT / "cache_tags" / tags / str(seed) / f"{mid}_{p}.npy"
+                        ft = EXT / TAG_ROOT / tags / str(seed) / f"{mid}_{p}.npy"
                         tg = np.load(ft) if ft.exists() else None
-                    halves.append((proba, aux, tg))
+                        with np.load(EXT / "cache_deg" / profile / str(seed) / f"{mid}_{p}.npz") as z:
+                            ball = z["ball"]
+                    halves.append((proba, aux, tg, ball))
                 got[mid] = halves
             if got:
                 data[(profile, seed)] = got
@@ -102,8 +107,8 @@ def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
 
 class _Seq:
     """What decode() reads from a Sequence when tag priors are on."""
-    def __init__(self, frame, tags):
-        self.frame, self.tags = frame, tags
+    def __init__(self, frame, tags, ball):
+        self.frame, self.tags, self.ball = frame, tags, ball
 
 
 _FRAMES = {}
@@ -127,8 +132,8 @@ def predict(cfg, data, keys=None):
         out[key] = {}
         for mid, halves in matches.items():
             preds = []
-            for i, (proba, aux, tags) in enumerate(halves):
-                seq = _Seq(_frame_axis(mid, i + 1), tags) if tags is not None else None
+            for i, (proba, aux, tags, ball) in enumerate(halves):
+                seq = _Seq(_frame_axis(mid, i + 1), tags, ball) if tags is not None else None
                 preds.append(dec.decode(proba, seq, cfg, None, aux))
             out[key][mid] = preds
     return out
@@ -279,7 +284,8 @@ GRID = {
 
 def cmd_grid(args):
     taus, primary = label_taus()
-    data, missing = load_source(args.model, profiles=("nominal",))
+    profiles = tuple(args.profile.split(","))        # several profiles: their mean is scored
+    data, missing = load_source(args.model, profiles=profiles)
     if not data:
         raise SystemExit(f"no probabilities under preds/{args.model}/oof")
     views = label_views(load_labels(), taus)
@@ -289,13 +295,16 @@ def cmd_grid(args):
         k, v = spec.split("=")
         grid[k] = [int(x) for x in v.split(",")]
     names = list(grid)
-    print(f"model={args.model} views={taus} grid={grid} fixed={fixed} "
+    print(f"model={args.model} profiles={profiles} views={taus} grid={grid} fixed={fixed} "
           f"matches={sorted(next(iter(data.values())))}")
     results = {}
     t0 = time.time()
     for combo in itertools.product(*(grid[n] for n in names)):
         cfg = dict(fixed, **dict(zip(names, combo)))
-        fam, by_tau, _ = family(score(predict(cfg, data), views, "nominal"))
+        preds = predict(cfg, data)
+        per = [family(score(preds, views, prof)) for prof in profiles]
+        fam = float(np.mean([f for f, _, _ in per]))
+        by_tau = {t: float(np.mean([bt[t] for _, bt, _ in per])) for t in taus}
         results[combo] = (fam, by_tau)
         print("  " + " ".join(f"{n}={v}" for n, v in zip(names, combo))
               + "  " + " ".join(f"{by_tau[t]:.4f}" for t in taus) + f"  family {fam:.4f}",
@@ -329,6 +338,35 @@ def cmd_grid(args):
         print(f"  {n}: " + "  ".join(
             f"{v}:{np.mean([results[c][0] for c in results if c[names.index(n)] == v]):.4f}"
             for v in grid[n]))
+
+
+# ---------------------------------------------------------------------------------- compare
+def _cfg_arg(text):
+    """A decoder config given as a json string or a path (None -> built-in defaults)."""
+    if text is None:
+        return {}
+    return json.loads(text) if text.lstrip().startswith("{") else json.loads(Path(text).read_text())
+
+
+def cmd_compare(args):
+    """Paired adoption rule for config B against config A, per profile."""
+    taus, primary = label_taus()
+    data, _ = load_source(args.model, tags=args.tags)
+    views = label_views(load_labels(), taus)
+    a, b = _cfg_arg(args.a), _cfg_arg(args.b)
+    pa, pb = predict(a, data), predict(b, data)
+    print(f"model={args.model} views={taus} tags={args.tags}\nA={json.dumps(a)}\nB={json.dumps(b)}")
+    for profile in PROFILES:
+        fa, ta, ma = family(score(pa, views, profile))
+        fb, tb, mb = family(score(pb, views, profile))
+        if not ma:
+            continue
+        print(f"{profile:<8} A {fa:.4f} [" + " ".join(f"{ta[t]:.4f}" for t in taus) + f"]  B {fb:.4f} ["
+              + " ".join(f"{tb[t]:.4f}" for t in taus) + "]  per match "
+              + " ".join(f"{m[-3:]} {mb[m] - ma[m]:+.4f}" for m in ma) + f"  -> {adoption(mb, ma)}")
+    da, db = detail(pa, views[primary]), detail(pb, views[primary])
+    print("A " + " ".join(f"{k}={v:.3f}" for k, v in da.items()))
+    print("B " + " ".join(f"{k}={v:.3f}" for k, v in db.items()))
 
 
 # ----------------------------------------------------------------------------------- export
@@ -423,10 +461,18 @@ def main():
         sp.add_argument("--tags", default=None, help="simulated tag noise level (cache_tags/<level>)")
     sub.choices["grid"].add_argument("--fixed", default=None, help="json of fixed decoder keys")
     sub.choices["grid"].add_argument("--set", action="append", help="grid override: key=v1,v2,...")
+    sub.choices["grid"].add_argument("--profile", default="nominal",
+                                     help="degraded profile(s), comma-separated; scored as their mean")
     sub.choices["export"].add_argument("--name", required=True)
     sub.add_parser("synth").add_argument("--name", default="synth_v1")
+    sp = sub.add_parser("compare")
+    sp.add_argument("--model", required=True)
+    sp.add_argument("--a", default=None, help="reference config: json string or path")
+    sp.add_argument("--b", required=True, help="candidate config: json string or path")
+    sp.add_argument("--tags", default=None)
     args = ap.parse_args()
-    return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth}[args.cmd](args)
+    return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth,
+            "compare": cmd_compare}[args.cmd](args)
 
 
 if __name__ == "__main__":
