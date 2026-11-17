@@ -7,8 +7,10 @@ matches are never read here.
 
     PYTHONPATH=src python scripts/decoder_bench.py table  --model lgb_v1 [--cfg configs/decoder.json]
     PYTHONPATH=src python scripts/decoder_bench.py grid   --model lgb_v1
+    PYTHONPATH=src python scripts/decoder_bench.py compare --model lgb_v1 --a CFG_A --b CFG_B
     PYTHONPATH=src python scripts/decoder_bench.py export --model lgb_v1 --cfg CFG --name decoder_v1
     PYTHONPATH=src python scripts/decoder_bench.py synth  [--name synth_v1]
+    ... --split metrica   scores the Metrica sample games (preds/<model>/metrica/): a veto, never tuned on
 
 Probabilities: ~/mtah-external/preds/<model>/oof/<profile>_<seed>/<MATCH>_<P>.npz (`proba`
 float32 [T,3]; optional aux/<MATCH>_<P>.npz with float [T] arrays). Matches whose two halves are
@@ -19,6 +21,9 @@ table   the decoder variants, each against the official smooth50 baseline comput
         (mean family gain >= +0.01 and non-negative on >= 4 of 5 matches) against the row above.
 grid    coarse grid over at most four parameters; choice by minimax regret over the label views,
         then the centre of the plateau (mean worst-regret of a config and its grid neighbours).
+compare the paired adoption rule for config B against config A (json strings or files).
+stats   structure of the decoded labels per match next to the truth (possession count, mean
+        duration, share under 1 / 2 / 4 s, dead share): the envelope for label-free target checks.
 export  write label predictions in the layout scripts/eval_external.py reads.
 synth   stand-in probabilities built from the fine labels with bursty errors, blurred boundaries
         and lower confidence where the degraded ball is missing (until real OOF files exist).
@@ -40,7 +45,12 @@ from mtah.relabel import min_control
 EXT = Path.home() / "mtah-external"
 ROOT = Path(__file__).resolve().parents[1]
 OOF5 = ["J03WMX", "J03WN1", "J03WOH", "J03WOY", "J03WPY"]
-PROFILES = ("nominal", "harsh")
+METRICA = ["METRICA1", "METRICA2", "METRICA3"]      # second dev set (veto only, never tuned on)
+SPLITS = {"oof5": dict(matches=OOF5, sub="oof", cache="cache"),
+          "metrica": dict(matches=METRICA, sub="metrica", cache="cache_metrica")}
+CUR = dict(SPLITS["oof5"])                          # set from --split in main()
+PROFILES = ("nominal", "stoppage", "harsh")
+TAG_ROOT = "cache_tags_v2"       # simulated Smart Tagging with the target's window structure
 SEEDS = (0, 1)
 FPS = 25
 
@@ -51,13 +61,13 @@ def label_taus():
     return [float(t) for t in cfg["eval_taus_s"]], float(cfg["min_control_tau_s"])
 
 
-def load_labels(matches=OOF5):
-    """{match: [y_half1, y_half2]} raw DFL labels (only the label array is read)."""
+def load_labels(matches=None):
+    """{match: [y_half1, y_half2]} raw provider labels (only the label array is read)."""
     out = {}
-    for mid in matches:
+    for mid in matches or CUR["matches"]:
         halves = []
         for p in (1, 2):
-            with np.load(EXT / "cache" / f"{mid}_{p}.npz") as z:
+            with np.load(EXT / CUR["cache"] / f"{mid}_{p}.npz") as z:
                 halves.append(z["y"].astype(np.int8))
         out[mid] = halves
     return out
@@ -68,12 +78,13 @@ def label_views(raw, taus):
             for t in taus}
 
 
-def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
-    """{(profile, seed): {match: [(proba, aux, tags) per half]}} for complete matches only."""
+def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=None, tags=None):
+    """{(profile, seed): {match: [(proba, aux, tags, ball) per half]}}, complete matches only."""
     data, missing = {}, []
+    matches = matches or CUR["matches"]
     for profile in profiles:
         for seed in seeds:
-            folder = EXT / "preds" / model / "oof" / f"{profile}_{seed}"
+            folder = EXT / "preds" / model / CUR["sub"] / f"{profile}_{seed}"
             got = {}
             for mid in matches:
                 files = [folder / f"{mid}_{p}.npz" for p in (1, 2)]
@@ -89,11 +100,13 @@ def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
                     if fa.exists():
                         with np.load(fa) as z:
                             aux = {k: z[k] for k in z.files if k != "frame"}
-                    tg = None
+                    tg = ball = None
                     if tags:
-                        ft = EXT / "cache_tags" / tags / str(seed) / f"{mid}_{p}.npy"
+                        ft = EXT / TAG_ROOT / tags / str(seed) / f"{mid}_{p}.npy"
                         tg = np.load(ft) if ft.exists() else None
-                    halves.append((proba, aux, tg))
+                        with np.load(EXT / "cache_deg" / profile / str(seed) / f"{mid}_{p}.npz") as z:
+                            ball = z["ball"]
+                    halves.append((proba, aux, tg, ball))
                 got[mid] = halves
             if got:
                 data[(profile, seed)] = got
@@ -102,8 +115,8 @@ def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
 
 class _Seq:
     """What decode() reads from a Sequence when tag priors are on."""
-    def __init__(self, frame, tags):
-        self.frame, self.tags = frame, tags
+    def __init__(self, frame, tags, ball):
+        self.frame, self.tags, self.ball = frame, tags, ball
 
 
 _FRAMES = {}
@@ -111,7 +124,7 @@ _FRAMES = {}
 
 def _frame_axis(mid, p):
     if (mid, p) not in _FRAMES:
-        with np.load(EXT / "cache" / f"{mid}_{p}.npz") as z:
+        with np.load(EXT / CUR["cache"] / f"{mid}_{p}.npz") as z:
             _FRAMES[(mid, p)] = z["frame"]
     return _FRAMES[(mid, p)]
 
@@ -127,8 +140,8 @@ def predict(cfg, data, keys=None):
         out[key] = {}
         for mid, halves in matches.items():
             preds = []
-            for i, (proba, aux, tags) in enumerate(halves):
-                seq = _Seq(_frame_axis(mid, i + 1), tags) if tags is not None else None
+            for i, (proba, aux, tags, ball) in enumerate(halves):
+                seq = _Seq(_frame_axis(mid, i + 1), tags, ball) if tags is not None else None
                 preds.append(dec.decode(proba, seq, cfg, None, aux))
             out[key][mid] = preds
     return out
@@ -249,23 +262,27 @@ def cmd_table(args):
     if missing:
         print(f"skipped (incomplete): {len(missing)} match-folders, e.g. {missing[:4]}")
     head = (f"{'variant':<16}" + "".join(f"{'t' + format(t, 'g'):>8}" for t in taus)
-            + f"{'family':>8}{'harsh':>8}{'pred/gt':>8}{'adF1':>7}{'lat_t':>6}{'lat_s':>6}{'lat_r':>6}"
-            + "  paired vs row above")
+            + f"{'family':>8}{'stopp.':>8}{'select':>8}{'harsh':>8}{'pred/gt':>8}{'adF1':>7}"
+            + f"{'lat_t':>6}{'lat_s':>6}{'lat_r':>6}  paired (select) vs row above")
     print(head)
     prev = None
     rows = [("baseline_smooth50", None)] + variants
     for name, cfg in rows:
         preds = baseline_preds("baseline_smooth50", data) if cfg is None else predict(cfg, data)
         fam, by_tau, by_match = family(score(preds, views, "nominal"))
+        sfam, _, s_match = family(score(preds, views, "stoppage"))
         hfam = family(score(preds, views, "harsh"))[0]
+        if s_match:                      # selection value: mean of the two dropout regimes
+            by_match = {m: (by_match[m] + s_match[m]) / 2 for m in by_match if m in s_match}
+        sel = float(np.mean(list(by_match.values())))
         d = detail(preds, views[primary], "nominal")
         verdict = adoption(by_match, prev) if prev is not None else ""
         print(f"{name:<16}" + "".join(f"{by_tau[t]:>8.4f}" for t in taus)
-              + f"{fam:>8.4f}{hfam:>8.4f}{d['pred/gt']:>8.2f}{d['aliveDeadF1']:>7.3f}"
+              + f"{fam:>8.4f}{sfam:>8.4f}{sel:>8.4f}{hfam:>8.4f}{d['pred/gt']:>8.2f}{d['aliveDeadF1']:>7.3f}"
               + f"{d['lat_turn']:>6.1f}{d['lat_stop']:>6.1f}{d['lat_restart']:>6.1f}  {verdict}",
               flush=True)
         prev = by_match
-    print("per-match family of the last row: "
+    print("per-match select of the last row: "
           + "  ".join(f"{m} {v:.4f}" for m, v in by_match.items()))
 
 
@@ -279,7 +296,8 @@ GRID = {
 
 def cmd_grid(args):
     taus, primary = label_taus()
-    data, missing = load_source(args.model, profiles=("nominal",))
+    profiles = tuple(args.profile.split(","))        # several profiles: their mean is scored
+    data, missing = load_source(args.model, profiles=profiles)
     if not data:
         raise SystemExit(f"no probabilities under preds/{args.model}/oof")
     views = label_views(load_labels(), taus)
@@ -289,13 +307,16 @@ def cmd_grid(args):
         k, v = spec.split("=")
         grid[k] = [int(x) for x in v.split(",")]
     names = list(grid)
-    print(f"model={args.model} views={taus} grid={grid} fixed={fixed} "
+    print(f"model={args.model} profiles={profiles} views={taus} grid={grid} fixed={fixed} "
           f"matches={sorted(next(iter(data.values())))}")
     results = {}
     t0 = time.time()
     for combo in itertools.product(*(grid[n] for n in names)):
         cfg = dict(fixed, **dict(zip(names, combo)))
-        fam, by_tau, _ = family(score(predict(cfg, data), views, "nominal"))
+        preds = predict(cfg, data)
+        per = [family(score(preds, views, prof)) for prof in profiles]
+        fam = float(np.mean([f for f, _, _ in per]))
+        by_tau = {t: float(np.mean([bt[t] for _, bt, _ in per])) for t in taus}
         results[combo] = (fam, by_tau)
         print("  " + " ".join(f"{n}={v}" for n, v in zip(names, combo))
               + "  " + " ".join(f"{by_tau[t]:.4f}" for t in taus) + f"  family {fam:.4f}",
@@ -329,6 +350,81 @@ def cmd_grid(args):
         print(f"  {n}: " + "  ".join(
             f"{v}:{np.mean([results[c][0] for c in results if c[names.index(n)] == v]):.4f}"
             for v in grid[n]))
+
+
+# ---------------------------------------------------------------------------------- compare
+def _cfg_arg(text):
+    """A decoder config given as a json string or a path (None -> built-in defaults)."""
+    if text is None:
+        return {}
+    return json.loads(text) if text.lstrip().startswith("{") else json.loads(Path(text).read_text())
+
+
+def cmd_compare(args):
+    """Paired adoption rule for config B against config A, per profile."""
+    taus, primary = label_taus()
+    data, _ = load_source(args.model, tags=args.tags)
+    views = label_views(load_labels(), taus)
+    a, b = _cfg_arg(args.a), _cfg_arg(args.b)
+    pa, pb = predict(a, data), predict(b, data)
+    print(f"model={args.model} views={taus} tags={args.tags}\nA={json.dumps(a)}\nB={json.dumps(b)}")
+    for profile in PROFILES:
+        fa, ta, ma = family(score(pa, views, profile))
+        fb, tb, mb = family(score(pb, views, profile))
+        if not ma:
+            continue
+        print(f"{profile:<8} A {fa:.4f} [" + " ".join(f"{ta[t]:.4f}" for t in taus) + f"]  B {fb:.4f} ["
+              + " ".join(f"{tb[t]:.4f}" for t in taus) + "]  per match "
+              + " ".join(f"{m[-3:]} {mb[m] - ma[m]:+.4f}" for m in ma) + f"  -> {adoption(mb, ma)}")
+    da, db = detail(pa, views[primary]), detail(pb, views[primary])
+    print("A " + " ".join(f"{k}={v:.3f}" for k, v in da.items()))
+    print("B " + " ".join(f"{k}={v:.3f}" for k, v in db.items()))
+
+
+# ------------------------------------------------------------------------------------ stats
+def spell_stats(halves):
+    """Structure of a label track (two halves): what the label-free target check looks at."""
+    lens, dead, total = [], 0, 0
+    for y in halves:
+        y = np.asarray(y)
+        for a, b, lab in dec.segments(y):
+            if lab != D:
+                lens.append(b - a)
+        dead += int(np.sum(y == D))
+        total += len(y)
+    lens = np.asarray(lens, dtype=float)
+    return {"n": len(lens), "mean_s": float(lens.mean() / FPS), "<1s": float(np.mean(lens < 25)),
+            "<2s": float(np.mean(lens < 50)), "<4s": float(np.mean(lens < 100)),
+            "dead": dead / total, "minutes": total / FPS / 60}
+
+
+def cmd_stats(args):
+    """Output statistics of the decoded labels per match, next to the truth of each label view."""
+    taus, _ = label_taus()
+    data, _ = load_source(args.model)
+    views = label_views(load_labels(), taus)
+    preds = predict(dec.resolve_cfg(args.cfg), data)
+    cols = ("n", "mean_s", "<1s", "<2s", "<4s", "dead")
+    print(f"model={args.model} cfg={args.cfg or 'defaults'}; n = possessions per match (two halves)")
+    print(f"{'match':<8}{'source':<16}" + "".join(f"{c:>9}" for c in cols) + f"{'n/90min':>9}")
+    rows = {}
+    for mid in CUR["matches"]:
+        entries = [(f"truth tau={t:g}", spell_stats(views[t][mid])) for t in taus]
+        for profile in PROFILES:
+            got = [spell_stats(preds[(profile, s)][mid]) for s in SEEDS
+                   if (profile, s) in preds and mid in preds[(profile, s)]]
+            if got:
+                entries.append((f"pred {profile}", {k: float(np.mean([g[k] for g in got])) for k in got[0]}))
+        for name, st in entries:
+            rows.setdefault(name, []).append(st)
+            print(f"{mid:<8}{name:<16}" + "".join(f"{st[c]:>9.3f}" if c != "n" else f"{st[c]:>9.0f}" for c in cols)
+                  + f"{st['n'] * 90 / st['minutes']:>9.0f}")
+    print("-- mean / min / max over matches")
+    for name, sts in rows.items():
+        for agg, fn in (("mean", np.mean), ("min", np.min), ("max", np.max)):
+            print(f"{agg:<8}{name:<16}" + "".join(
+                f"{fn([s[c] for s in sts]):>9.3f}" if c != "n" else f"{fn([s[c] for s in sts]):>9.0f}"
+                for c in cols) + f"{fn([s['n'] * 90 / s['minutes'] for s in sts]):>9.0f}")
 
 
 # ----------------------------------------------------------------------------------- export
@@ -416,17 +512,28 @@ def cmd_synth(args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("table", "grid", "export"):
+    for name in ("table", "grid", "export", "stats"):
         sp = sub.add_parser(name)
+        sp.add_argument("--split", default="oof5", choices=list(SPLITS))
         sp.add_argument("--model", required=True)
         sp.add_argument("--cfg", default=None, help="decoder config json (default: built-in defaults)")
         sp.add_argument("--tags", default=None, help="simulated tag noise level (cache_tags/<level>)")
     sub.choices["grid"].add_argument("--fixed", default=None, help="json of fixed decoder keys")
     sub.choices["grid"].add_argument("--set", action="append", help="grid override: key=v1,v2,...")
+    sub.choices["grid"].add_argument("--profile", default="nominal",
+                                     help="degraded profile(s), comma-separated; scored as their mean")
     sub.choices["export"].add_argument("--name", required=True)
     sub.add_parser("synth").add_argument("--name", default="synth_v1")
+    sp = sub.add_parser("compare")
+    sp.add_argument("--model", required=True)
+    sp.add_argument("--a", default=None, help="reference config: json string or path")
+    sp.add_argument("--b", required=True, help="candidate config: json string or path")
+    sp.add_argument("--tags", default=None)
+    sp.add_argument("--split", default="oof5", choices=list(SPLITS))
     args = ap.parse_args()
-    return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth}[args.cmd](args)
+    CUR.update(SPLITS[getattr(args, "split", "oof5")])
+    return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth,
+            "compare": cmd_compare, "stats": cmd_stats}[args.cmd](args)
 
 
 if __name__ == "__main__":
