@@ -218,3 +218,12 @@ def test_artefact_remembers_its_feature_version(train, test_seq, tmp_path):
     X2, n2 = features.compute(test_seq, 2)
     X3, n3 = features.compute(test_seq, 3)
     assert n2 == n3 and not np.array_equal(np.nan_to_num(X2), np.nan_to_num(X3))
+
+
+def test_raw_kinematics_token(train):
+    import re
+    cfg = dict(CFG, rounds={"dead": 3, "team": 3}, drop_features=["@raw_kinematics"])
+    small = model.fit(train[:1], cfg)
+    assert not any(re.search(p, n) for p in features.RAW_KINEMATICS for n in small["names"])
+    assert "n_sp_mean_rel" in small["names"] and "n_bdv_rel" in small["names"]
+    assert "n_bspeed" in small["names"]                      # ball speed itself is kept

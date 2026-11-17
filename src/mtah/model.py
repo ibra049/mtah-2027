@@ -73,9 +73,17 @@ def feature_version(cfg) -> int:
 
 
 def keep_names(names, cfg) -> list:
-    """Feature names the model uses: all computed names minus cfg["drop_features"] (regexes,
-    matched with re.search). Order follows mtah.features."""
-    pats = [re.compile(p) for p in cfg.get("drop_features", [])]
+    """Feature names the model uses: cfg["feature_names"] if given, else all computed names
+    minus cfg["drop_features"] (regexes, matched with re.search; "@raw_kinematics" expands to
+    features.RAW_KINEMATICS), in mtah.features order."""
+    if cfg.get("feature_names"):              # an explicit list (re-fitting an earlier model)
+        missing = [n for n in cfg["feature_names"] if n not in set(names)]
+        if missing:
+            raise ValueError(f"feature_names not computed by mtah.features: {missing[:5]}")
+        return list(cfg["feature_names"])
+    pats = []
+    for p in cfg.get("drop_features", []):
+        pats += [re.compile(q) for q in (features.RAW_KINEMATICS if p == "@raw_kinematics" else [p])]
     return [n for n in names if not any(p.search(n) for p in pats)]
 
 
@@ -319,13 +327,19 @@ def write_regression(art, path, seq: Sequence) -> None:
                             **{"aux__" + k: v for k, v in aux.items()})
 
 
+def regression_input(path) -> Sequence:
+    """The fixed input sequence stored in an artefact folder's regression case."""
+    with np.load(Path(path) / REGRESS_FILE) as z:
+        return Sequence("REGRESS", 1, z["frame"], z["ball"], z["home"], z["away"], z["pitch"],
+                        np.full(len(z["frame"]), -1, np.int8))
+
+
 def check_regression(path) -> dict:
     """Recompute the stored regression case. -> {"n": frames, "max_abs_diff": float, "equal": bool}."""
     path = Path(path)
     art = load(path)
+    seq = regression_input(path)
     with np.load(path / REGRESS_FILE) as z:
-        seq = Sequence("REGRESS", 1, z["frame"], z["ball"], z["home"], z["away"], z["pitch"],
-                       np.full(len(z["frame"]), -1, np.int8))
         want = {"proba": z["proba"], **{k[5:]: z[k] for k in z.files if k.startswith("aux__")}}
     proba, aux = predict_both(art, seq)
     got = {"proba": proba, **aux}

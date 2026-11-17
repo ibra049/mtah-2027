@@ -40,6 +40,8 @@ BALL_SPEED_CAP = 45.0     # m/s
 T_CAP_S = 60.0
 SLOW_MPS = 1.0
 SLOW_REL = 0.4                      # "slow" relative to the half's speed scale
+SPEED_FLOOR = 1.0                   # m/s: below this a tracked speed is jitter as likely as motion
+LONG_WINDOW = 375                   # 15 s: stoppages last a median of 20 s
 SPEED_SCALE_Q = 0.9                 # per-half speed scale: this quantile of the all-player mean speed
 SPEED_SCALE_DEFAULT = 2.5           # m/s, when a half has no measurable speeds
 BOX_DEPTH, BOX_HALF_WIDTH = 16.5, 20.16
@@ -269,7 +271,10 @@ def _team_block(P, bi, vb, dirn, L, W, version=FEATURE_VERSION):
     bx = bi[:, 0] * np.float32(dirn)
     f["ball_ahead"] = bx - cx
     f["behind"] = np.where(ball_ok, (m & (x < bx[:, None])).sum(1), np.nan) / nn
-    aux = dict(sp=sp, sp_sum=sp_sum, ns=ns, slow_cnt=slow_cnt)
+    spf = np.maximum(sp, SPEED_FLOOR)                     # NaN stays NaN
+    vsum = np.where(ms[..., None], V, 0).sum(1)           # [T,2] summed velocity (pitch frame)
+    aux = dict(sp=sp, sp_sum=sp_sum, ns=ns, slow_cnt=slow_cnt, spf=spf,
+               spf_sum=np.where(ms, spf, 0).sum(1), vsum=vsum)
     return f, aux
 
 
@@ -506,27 +511,37 @@ def _compute(seq, version=FEATURE_VERSION):
     for name, v in zip(("q10", "q25", "med", "q75", "q90"), q):
         c["n_sp_" + name] = v
 
-    # The same speed cues in units of the half's own speed scale (a high quantile of the
-    # all-player mean speed: it reflects open play and barely moves with the dead-ball share).
-    # Tempo and tracker smoothing differ between providers and leagues; ratios do not.
-    spm = np.asarray(c["n_sp_mean"], np.float64)
+    # Speed cues that hold across tracking providers ("_rel" columns):
+    #  * each player's speed is clipped from below at SPEED_FLOOR first. A standing player reads
+    #    0 m/s on smooth tracking and 0.3-0.6 m/s on jittery tracking; under the floor both are
+    #    the same value, so the bottom of the distribution means the same thing everywhere;
+    #  * then everything is divided by the half's own speed scale (a high quantile of the
+    #    all-player mean: it reflects open play and barely moves with the dead-ball share), so
+    #    tempo differences between leagues cancel.
+    spf_mean = (auxh["spf_sum"] + auxa["spf_sum"]) / nsn
+    spm = np.asarray(spf_mean, np.float64)
     spscale = float(np.quantile(spm[~np.isnan(spm)], SPEED_SCALE_Q)) if (~np.isnan(spm)).any() else 0.0
     spscale = spscale if spscale > 0.2 else SPEED_SCALE_DEFAULT
     c["n_reg_spscale"] = np.full(T, spscale)
-    for key in ("sp_mean", "sp_q25", "sp_med", "sp_q75", "sp_max", "near_sp", "vx"):
-        c[f"h_{key}_rel"] = fh[key] / spscale
-        c[f"a_{key}_rel"] = fa[key] / spscale
-    for key in ("sp_mean", "sp_med", "near_sp"):
-        c[f"d_{key}_rel"] = (fh[key] - fa[key]) / spscale
-    for name in ("mean", "q10", "q25", "med", "q75", "q90"):
-        c[f"n_sp_{name}_rel"] = c[f"n_sp_{name}"] / spscale
-    slow = {}
-    for side, aux in (("h", auxh), ("a", auxa)):
-        slow[side] = (aux["sp"] < SLOW_REL * spscale).sum(1)
-        c[f"{side}_slow_rel"] = slow[side] / np.where(aux["ns"] > 0, aux["ns"], np.nan)
-    c["d_slow_rel"] = c["h_slow_rel"] - c["a_slow_rel"]
-    c["n_slow_rel"] = (slow["h"] + slow["a"]) / nsn
+    slow_thr = max(SLOW_REL * spscale, SPEED_FLOOR)      # never below what jitter alone produces
+    c["n_sp_mean_rel"] = spf_mean / spscale
+    for name, v in zip(("q10", "q25", "med", "q75", "q90"), q):
+        c[f"n_sp_{name}_rel"] = np.maximum(v, SPEED_FLOOR) / spscale     # quantiles commute with the floor
+    for side, f, aux in (("h", fh, auxh), ("a", fa, auxa)):
+        nside = np.where(aux["ns"] > 0, aux["ns"], np.nan)
+        c[f"{side}_sp_mean_rel"] = aux["spf_sum"] / nside / spscale
+        for key in ("sp_q25", "sp_med", "sp_q75", "sp_max", "near_sp"):
+            c[f"{side}_{key}_rel"] = np.maximum(f[key], SPEED_FLOOR) / spscale
+        c[f"{side}_vx_rel"] = f["vx"] / spscale
+        c[f"{side}_slow_rel"] = (aux["sp"] < slow_thr).sum(1) / nside
+    for key in ("sp_mean", "sp_med", "near_sp", "slow"):
+        c[f"d_{key}_rel"] = c[f"h_{key}_rel"] - c[f"a_{key}_rel"]
+    c["n_slow_rel"] = ((auxh["sp"] < slow_thr).sum(1) + (auxa["sp"] < slow_thr).sum(1)) / nsn
     c["d_blockv_rel"] = c["d_blockv"] / spscale
+    # Ball-free stoppage cue: in open play both teams shift together (the mean velocity vector
+    # is a large part of the mean speed); in a stoppage players drift in all directions.
+    vs = auxh["vsum"] + auxa["vsum"]
+    c["n_coh"] = _norm(vs) / nsn / np.maximum(spf_mean, 1e-3)
 
     # raw "nearest team" vote: +1 home nearer, -1 away nearer, NaN while the ball is unseen
     closer = np.sign(fa["d1"] - fh["d1"])
@@ -592,12 +607,17 @@ def _compute(seq, version=FEATURE_VERSION):
     # multiscale past / future means
     base = ["n_obs", "n_bspeed", "n_btouch", "n_bgoal", "n_bdv", "n_bdv_rel", "n_dmin", "n_sp_mean", "n_slow",
             "d_d1", "d_closer", "d_terr", "d_blockv", "d_bx", "d_sy", "d_behind", "d_sp_mean",
-            "h_d1", "a_d1", "n_sp_mean_rel", "n_slow_rel", "d_sp_mean_rel", "d_blockv_rel"]
+            "h_d1", "a_d1", "n_sp_mean_rel", "n_slow_rel", "d_sp_mean_rel", "d_blockv_rel",
+            "n_coh", "n_sp_q90_rel"]
     for name in base:
         x = np.asarray(c[name], np.float64)
         for wlen in WINDOWS:
             c[f"{name}_p{wlen}"] = _win_mean(x, -wlen, -1)
             c[f"{name}_f{wlen}"] = _win_mean(x, 1, wlen)
+    for name in ("n_sp_mean_rel", "n_slow_rel", "n_coh", "n_sp_q90_rel"):      # 15 s context
+        x = np.asarray(c[name], np.float64)
+        c[f"{name}_p{LONG_WINDOW}"] = _win_mean(x, -LONG_WINDOW, -1)
+        c[f"{name}_f{LONG_WINDOW}"] = _win_mean(x, 1, LONG_WINDOW)
     vote = np.asarray(closer, np.float64)
     for wlen in VOTE_WINDOWS:
         c[f"d_closer_c{wlen}"] = _win_mean(vote, -wlen, wlen)
