@@ -21,6 +21,8 @@ table   the decoder variants, each against the official smooth50 baseline comput
 grid    coarse grid over at most four parameters; choice by minimax regret over the label views,
         then the centre of the plateau (mean worst-regret of a config and its grid neighbours).
 compare the paired adoption rule for config B against config A (json strings or files).
+stats   structure of the decoded labels per match next to the truth (possession count, mean
+        duration, share under 1 / 2 / 4 s, dead share): the envelope for label-free target checks.
 export  write label predictions in the layout scripts/eval_external.py reads.
 synth   stand-in probabilities built from the fine labels with bursty errors, blurred boundaries
         and lower confidence where the degraded ball is missing (until real OOF files exist).
@@ -369,6 +371,52 @@ def cmd_compare(args):
     print("B " + " ".join(f"{k}={v:.3f}" for k, v in db.items()))
 
 
+# ------------------------------------------------------------------------------------ stats
+def spell_stats(halves):
+    """Structure of a label track (two halves): what the label-free target check looks at."""
+    lens, dead, total = [], 0, 0
+    for y in halves:
+        y = np.asarray(y)
+        for a, b, lab in dec.segments(y):
+            if lab != D:
+                lens.append(b - a)
+        dead += int(np.sum(y == D))
+        total += len(y)
+    lens = np.asarray(lens, dtype=float)
+    return {"n": len(lens), "mean_s": float(lens.mean() / FPS), "<1s": float(np.mean(lens < 25)),
+            "<2s": float(np.mean(lens < 50)), "<4s": float(np.mean(lens < 100)),
+            "dead": dead / total, "minutes": total / FPS / 60}
+
+
+def cmd_stats(args):
+    """Output statistics of the decoded labels per match, next to the truth of each label view."""
+    taus, _ = label_taus()
+    data, _ = load_source(args.model)
+    views = label_views(load_labels(), taus)
+    preds = predict(dec.resolve_cfg(args.cfg), data)
+    cols = ("n", "mean_s", "<1s", "<2s", "<4s", "dead")
+    print(f"model={args.model} cfg={args.cfg or 'defaults'}; n = possessions per match (two halves)")
+    print(f"{'match':<8}{'source':<16}" + "".join(f"{c:>9}" for c in cols) + f"{'n/90min':>9}")
+    rows = {}
+    for mid in OOF5:
+        entries = [(f"truth tau={t:g}", spell_stats(views[t][mid])) for t in taus]
+        for profile in PROFILES:
+            got = [spell_stats(preds[(profile, s)][mid]) for s in SEEDS
+                   if (profile, s) in preds and mid in preds[(profile, s)]]
+            if got:
+                entries.append((f"pred {profile}", {k: float(np.mean([g[k] for g in got])) for k in got[0]}))
+        for name, st in entries:
+            rows.setdefault(name, []).append(st)
+            print(f"{mid:<8}{name:<16}" + "".join(f"{st[c]:>9.3f}" if c != "n" else f"{st[c]:>9.0f}" for c in cols)
+                  + f"{st['n'] * 90 / st['minutes']:>9.0f}")
+    print("-- mean / min / max over matches")
+    for name, sts in rows.items():
+        for agg, fn in (("mean", np.mean), ("min", np.min), ("max", np.max)):
+            print(f"{agg:<8}{name:<16}" + "".join(
+                f"{fn([s[c] for s in sts]):>9.3f}" if c != "n" else f"{fn([s[c] for s in sts]):>9.0f}"
+                for c in cols) + f"{fn([s['n'] * 90 / s['minutes'] for s in sts]):>9.0f}")
+
+
 # ----------------------------------------------------------------------------------- export
 def cmd_export(args):
     data, missing = load_source(args.model, tags=args.tags)
@@ -454,7 +502,7 @@ def cmd_synth(args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("table", "grid", "export"):
+    for name in ("table", "grid", "export", "stats"):
         sp = sub.add_parser(name)
         sp.add_argument("--model", required=True)
         sp.add_argument("--cfg", default=None, help="decoder config json (default: built-in defaults)")
@@ -472,7 +520,7 @@ def main():
     sp.add_argument("--tags", default=None)
     args = ap.parse_args()
     return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth,
-            "compare": cmd_compare}[args.cmd](args)
+            "compare": cmd_compare, "stats": cmd_stats}[args.cmd](args)
 
 
 if __name__ == "__main__":
