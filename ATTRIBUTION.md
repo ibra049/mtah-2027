@@ -10,8 +10,8 @@ as open data under **CC BY 4.0**. Our models are trained and tuned only on these
 come from the per-frame `BallStatus` and `BallPossession` flags of the corrected tracking
 (`docs/label_semantics.md`).
 
-> Bassek, M., et al. (2025). *Scientific Data* 12, 195. **TODO: full title and DOI to be copied
-> from the dataset's landing page before release.**
+> Bassek, M., et al. (2025). *Scientific Data* 12, 195. https://doi.org/10.1038/s41597-025-04505-y
+> Data: https://doi.org/10.6084/m9.figshare.28196177 (CC BY 4.0)
 
 Match ids used: J03WMX, J03WN1, J03WOH, J03WOY, J03WPY (training / out-of-fold development) and
 J03WQQ, J03WR9 (holdout).

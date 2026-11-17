@@ -185,7 +185,7 @@ def test_seen_touches():
     col = dict(zip(names, X.T))
     ev = features.touch_events(s.ball[:, :2], ~np.isnan(s.ball[:, 0]), s.home, s.away,
                                np.linalg.norm(s.home - s.ball[:, None, :2], axis=2).min(1),
-                               np.linalg.norm(s.away - s.ball[:, None, :2], axis=2).min(1))
+                               np.linalg.norm(s.away - s.ball[:, None, :2], axis=2).min(1), 5.0)
     assert ev["s"].tolist() == [1.0, -1.0] and (ev["hid"] == 0).all()
     assert abs(ev["t"][0] - 100) <= 2 and abs(ev["t"][1] - 150) <= 2
     assert ev["mag"][0] == pytest.approx(8.0, abs=0.5)
@@ -197,6 +197,7 @@ def test_seen_touches():
     assert col["d_tch_last"][50] == 0 and col["n_tch_tlast"][50] == features.T_CAP_S
     assert col["d_tch_last2"][200] == 1 and col["d_tch_last"][200] == -1
     assert col["n_tch_last_d"][125] == pytest.approx(np.hypot(0.5, 0.3), abs=0.3)
+    assert col["d_kick_last"][125] == 1 and col["d_kick_next"][125] == -1      # the strict stream sees it too
     assert col["h_tch_p50"][k + 10] == 1 and col["a_tch_p50"][k + 10] == 0
     assert col["a_tch_f50"][r - 10] == 1 and col["d_tch_f50"][r - 10] == -1
     assert col["h_tch_p25"][k + 40] == 0 and col["h_tch_p125"][k + 40] == 1
@@ -207,7 +208,7 @@ def test_hidden_touch_is_reconstructed_inside_the_gap():
     obs = ~np.isnan(s.ball[:, 0])
     dh = np.linalg.norm(s.home - s.ball[:, None, :2], axis=2).min(1)
     da = np.linalg.norm(s.away - s.ball[:, None, :2], axis=2).min(1)
-    ev = features.touch_events(s.ball[:, :2], obs, s.home, s.away, dh, da)
+    ev = features.touch_events(s.ball[:, :2], obs, s.home, s.away, dh, da, 5.0)
     hid = ev["hid"] == 1
     assert hid.sum() == 1 and ev["s"][hid][0] == 1               # the kicker's team
     assert abs(int(ev["t"][hid][0]) - 100) <= 2                  # at the true kick time
@@ -219,7 +220,7 @@ def test_hidden_touch_is_reconstructed_inside_the_gap():
     straight = _kick_seq(hidden=False)
     straight.ball[110:140] = np.nan
     obs2 = ~np.isnan(straight.ball[:, 0])
-    ev2 = features.touch_events(straight.ball[:, :2], obs2, straight.home, straight.away, dh, da)
+    ev2 = features.touch_events(straight.ball[:, :2], obs2, straight.home, straight.away, dh, da, 5.0)
     assert (ev2["hid"] == 0).all()
 
 
@@ -228,12 +229,13 @@ def test_regime_descriptors(seq, XN):
     col = {n: X[:, i] for i, n in enumerate(names)}
     miss = np.isnan(seq.ball[:, 0])
     reg = [n for n in names if n.startswith("n_reg_")]
-    assert len(reg) == 6
+    assert len(reg) == 9
     for n in reg:
         assert (col[n] == col[n][0]).all()                 # one value per half
     assert col["n_reg_miss"][0] == pytest.approx(miss.mean(), abs=1e-4)
     assert 0 <= col["n_reg_gap10"][0] <= col["n_reg_gap4"][0] <= col["n_reg_gap2"][0] <= 1
-    vis = (~np.isnan(seq.home[..., 0])).sum(1) + (~np.isnan(seq.away[..., 0])).sum(1)
+    inp = features._in_play(seq)                           # objects far off the pitch do not count
+    vis = (~np.isnan(inp.home[..., 0])).sum(1) + (~np.isnan(inp.away[..., 0])).sum(1)
     assert col["n_reg_players"][0] == pytest.approx(vis.mean(), abs=1e-4)
     s = seq.copy()
     s.ball[:] = np.nan
@@ -252,3 +254,130 @@ def test_gap_clock_runs_past_30_s():
     assert col["n_t_since"][990] == pytest.approx((990 - last) / 25, abs=1e-3) and col["n_t_since"][990] > 30
     assert col["n_t_until"][101] == pytest.approx((nxt - 101) / 25, abs=1e-3) and col["n_t_until"][101] > 30
     assert col["n_gap"][500] == pytest.approx((nxt - last - 1) / 25, abs=1e-3)
+
+
+def test_touch_threshold_follows_the_noise():
+    """A ball passed back and forth (a kick every 2 s). On a jittery track the absolute jump
+    threshold of a clean track would fire on noise; the relative one keeps the strict stream
+    close to the true number of kicks on both."""
+    from mtah.canonical import Sequence
+    T = 3000
+    tri = np.abs((np.arange(T) % 100) - 50) * (8.0 / 25)          # 0..16 m and back, 8 m/s
+    rng = np.random.default_rng(0)
+    n_true = T // 50
+    counts = {}
+    for name, sigma in (("clean", 0.0), ("jitter", 0.4)):
+        ball = np.zeros((T, 3), np.float32)
+        ball[:, 0] = tri
+        e = np.cumsum(rng.normal(0, 1, (T + 20, 2)), 0)
+        ball[:, :2] += ((e[20:] - e[:-20]) / np.sqrt(20) * sigma).astype(np.float32)
+        home = np.full((T, 3, 2), np.nan, np.float32)
+        away = np.full((T, 3, 2), np.nan, np.float32)
+        home[:, 0], home[:, 1], home[:, 2] = (-0.7, 0.2), (-20.0, 10.0), (-40.0, 0.0)
+        away[:, 0], away[:, 1], away[:, 2] = (16.7, -0.2), (25.0, 12.0), (45.0, 0.0)
+        s = Sequence("N", 1, np.arange(T, dtype=np.int64), ball, home, away,
+                     np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+        X, names = features.compute(s)
+        col = dict(zip(names, X.T))
+        counts[name] = (float(col["n_reg_jscale"][0]), int((col["n_kick_tlast"] == 0).sum()),
+                        int((col["n_tch_tlast"] == 0).sum()))
+    assert counts["jitter"][0] > counts["clean"][0] + 1.0                  # the noise scale sees the jitter
+    assert 0.8 * n_true <= counts["clean"][1] <= 1.2 * n_true              # every kick, nothing else
+    assert 0.6 * n_true <= counts["jitter"][1] <= 1.6 * n_true             # still selective under jitter
+    assert counts["jitter"][2] >= counts["jitter"][1]                      # the sensitive stream fires more
+
+
+def test_objects_far_outside_the_pitch_are_ignored(seq, XN):
+    X, names = XN
+    s = seq.copy()
+    K = s.home.shape[1]
+    s.home = np.concatenate([s.home, np.full((len(s), 1, 2), np.nan, np.float32)], 1)
+    s.home[:, K] = (-60.0, 5.0) if features.attack_dir(seq) > 0 else (60.0, 5.0)   # 7.5 m behind the home goal
+    X2, _ = features.compute(s)
+    skip = [i for i, n in enumerate(names)]
+    np.testing.assert_allclose(X2[:, skip], X[:, skip], rtol=1e-4, atol=1e-4)
+    # a taker one metre outside the touchline still counts
+    s2 = seq.copy()
+    s2.home = np.concatenate([s2.home, np.full((len(s2), 1, 2), np.nan, np.float32)], 1)
+    s2.home[:, K] = (0.0, 35.0)
+    X3, _ = features.compute(s2)
+    assert X3[0, names.index("h_touch")] == pytest.approx(-1.0, abs=1e-3)
+
+
+def test_relative_kinematics_have_a_twin_for_every_raw_column(seq, XN):
+    """Every absolute-unit kinematic column listed in RAW_KINEMATICS has a "_rel" twin (so a
+    model for another tracking provider can drop the raw ones)."""
+    import re
+    X, names = XN
+    col = dict(zip(names, X.T))
+    assert col["d_blockv_rel"][300] == pytest.approx(col["d_blockv"][300] / col["n_reg_spscale"][0], abs=2e-4)
+    raw = [n for n in names if any(re.search(p, n) for p in features.RAW_KINEMATICS)]
+    assert len(raw) > 30
+    for n in raw:
+        base = re.sub(r"(_[pf]\d+)?$", "", n)
+        tail = n[len(base):]
+        assert base + "_rel" + tail in names, n
+
+
+def test_speed_floor_makes_standing_and_jittering_players_equal():
+    """Players that stand still (smooth tracker) and players that jitter on the spot by 0.2 m
+    (noisy tracker) give the same "_rel" speed statistics; the raw ones differ."""
+    from mtah.canonical import Sequence
+    T, K = 600, 11
+    rng = np.random.default_rng(3)
+    spots = np.stack([rng.uniform(-45, 45, (2, K)), rng.uniform(-30, 30, (2, K))], -1).astype(np.float32)
+    spots[0, :, 0] -= 5                       # home a little behind away: a defined attack direction
+    out = {}
+    for name, sigma in (("still", 0.0), ("jitter", 0.2)):
+        e = np.cumsum(rng.normal(0, 1, (T + 20, 2, K, 2)), 0)
+        wander = ((e[20:] - e[:-20]) / np.sqrt(20) * sigma).astype(np.float32)
+        ball = np.zeros((T, 3), np.float32)
+        s = Sequence("F", 1, np.arange(T, dtype=np.int64), ball, spots[0] + wander[:, 0],
+                     spots[1] + wander[:, 1], np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+        X, names = features.compute(s)
+        out[name] = dict(zip(names, X.T))
+    mid = slice(50, 550)
+    assert np.nanmean(out["jitter"]["n_sp_mean"][mid]) > np.nanmean(out["still"]["n_sp_mean"][mid]) + 0.2
+    for n in ("n_sp_mean_rel", "n_sp_q10_rel", "n_sp_med_rel", "h_sp_mean_rel", "a_sp_q25_rel"):
+        np.testing.assert_allclose(np.nanmean(out["jitter"][n][mid]), np.nanmean(out["still"][n][mid]),
+                                   rtol=0.03, atol=0.03, err_msg=n)
+    # the slow share only loses the tail of the jitter above the floor
+    assert np.nanmean(out["still"]["n_slow_rel"][mid]) == pytest.approx(1.0)
+    assert np.nanmean(out["jitter"]["n_slow_rel"][mid]) > 0.8
+
+
+def test_movement_coherence():
+    """Everyone moving the same way: coherence near 1; everyone drifting at random: near 0."""
+    from mtah.canonical import Sequence
+    T, K = 400, 11
+    rng = np.random.default_rng(4)
+    base = np.stack([rng.uniform(-30, 0, (2, K)), rng.uniform(-25, 25, (2, K))], -1).astype(np.float32)
+    base[1, :, 0] += 8
+    t = np.arange(T, dtype=np.float32)[:, None, None]
+    shift = np.concatenate([t * (3.0 / 25), 0 * t], 2)                    # 3 m/s along x for all
+    ball = np.zeros((T, 3), np.float32)
+    mk = lambda h, a: Sequence("C", 1, np.arange(T, dtype=np.int64), ball, h.astype(np.float32),   # noqa: E731
+                               a.astype(np.float32), np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+    X, names = features.compute(mk(base[0] + shift, base[1] + shift))
+    assert np.nanmean(X[50:350, names.index("n_coh")]) > 0.9
+    ang = rng.uniform(0, 2 * np.pi, (2, K))
+    drift = np.stack([np.cos(ang), np.sin(ang)], -1) * (2.0 / 25)         # 2 m/s, random headings
+    X, names = features.compute(mk(base[0] + t * drift[0], base[1] + t * drift[1]))
+    assert np.nanmean(X[50:350, names.index("n_coh")]) < 0.4
+
+
+def test_feature_versions(seq):
+    X2, n2 = features.compute(seq, version=2)
+    X3, n3 = features.compute(seq, version=3)
+    assert n2 == n3
+    with pytest.raises(ValueError):
+        features.compute(seq, version=1)
+    col2, col3 = dict(zip(n2, X2.T)), dict(zip(n3, X3.T))
+    # version 2: every tracked object counts; version 3 ignores the ones far outside the pitch
+    raw = (~np.isnan(seq.home[..., 0])).sum(1) + (~np.isnan(seq.away[..., 0])).sum(1)
+    assert col2["n_reg_players"][0] == pytest.approx(raw.mean(), abs=1e-4)
+    assert col3["n_reg_players"][0] < col2["n_reg_players"][0]
+    # both stay exactly team-symmetric
+    for v, X in ((2, X2), (3, X3)):
+        np.testing.assert_array_equal(features.compute(features.swap_seq(seq), v)[0],
+                                      features.swap_features(X, n2))
