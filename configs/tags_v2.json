@@ -1,0 +1,30 @@
+{
+ "_doc": "Simulated Smart Tagging v2 (cache_tags_v2). Structure matched to label-free aggregates of the TARGET's Smart Tagging (an input feature, not GT) relayed by decoder-7d from the captain: fixed set-piece windows (35 s; kickoffs 5 s, tag start 3.5 s before kickoff), ~30 set-piece tags per half, 32/59 set pieces without team, long attacking-phase windows (CREATING CHANCES 30 s exact, BUILD UP ~20 s, PROGRESSION ~18 s, ATTACKING TRANSITION ~15 s, others median 12-30 s) running across turnovers, attacking-phase coverage ~0.69 one team / ~0.075 both / rest none. Per-code relative counts from DATA.md. Defending mirror rows are not emitted (decoder ignores them). Unspecified lengths and all noise are ASSUMPTIONS.",
+ "fps": 25,
+ "setpiece_len_s": 35.0,
+ "kickoff_len_s": 5.0,
+ "setpieces_per_half": 30,
+ "phase_tau_s": 0.5,
+ "refractory_s": 5.0,
+ "long_ball_m": 30.0,
+ "long_ball_s": 1.5,
+ "box_depth_m": 16.5,
+ "box_half_width_m": 20.16,
+ "chance_r_m": 25.0,
+ "_phase_len_s": "median length; CREATING CHANCES fixed; others multiplied by U(1-len_spread, 1+len_spread). LONG BALL / BALL IN FINAL THIRD / BALL IN THE BOX lengths are assumptions inside the reported 12-30 s range.",
+ "phase_len_s": {"BUILD UP": 20.0, "PROGRESSION": 18.0, "CREATING CHANCES": 30.0, "ATTACKING TRANSITION": 15.0,
+                 "LONG BALL": 12.0, "BALL IN FINAL THIRD": 15.0, "BALL IN THE BOX": 12.0},
+ "phase_fixed": ["CREATING CHANCES"],
+ "len_spread": 0.2,
+ "_phase_count_per_match": "DATA.md counts (relative density per code); scaled per half by k, bisected so the share of frames with no attacking-phase tag = target_none.",
+ "phase_count_per_match": {"BUILD UP": 22, "PROGRESSION": 66, "CREATING CHANCES": 30, "ATTACKING TRANSITION": 24,
+                           "LONG BALL": 29, "BALL IN FINAL THIRD": 93, "BALL IN THE BOX": 72},
+ "target_none": 0.235,
+ "target_both": 0.075,
+ "noise": {
+  "clean":   {"sp_offset": ["fixed", 3.5],       "sp_miss": 0.0,  "sp_false_pos": 0, "sp_extra_n": 0.23, "sp_wrong_type": 0.0,  "ph_jitter_s": 0.0, "ph_false_pos": 0},
+  "nominal": {"sp_offset": ["normal", 3.5, 2.0], "sp_miss": 0.10, "sp_false_pos": 2, "sp_extra_n": 0.23, "sp_wrong_type": 0.05, "ph_jitter_s": 1.5, "ph_false_pos": 3},
+  "harsh":   {"sp_offset": ["uniform", -3.0, 12.0], "sp_miss": 0.25, "sp_false_pos": 6, "sp_extra_n": 0.30, "sp_wrong_type": 0.15, "ph_jitter_s": 3.0, "ph_false_pos": 8}
+ },
+ "_sp_extra_n": "throw-ins are always N (~40% of restarts); extra N on other set pieces 0.23 brings the N share to ~0.54 = 32/59 on the target."
+}

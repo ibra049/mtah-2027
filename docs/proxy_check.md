@@ -24,3 +24,18 @@ Reading:
     strongly than DFL nominal assumes (dead/alive ratio drawn from 0.8–2×).
   - This is an inference from published aggregate scores, not from GT. Whether to widen the
     nominal ratio range is the captain's call.
+
+## Profile `stoppage` (captain decision after the reading above)
+Dead/alive ball-missing ratio drawn log-uniform 2–10× with long dead gaps; overall missing still 40.7%.
+Official baseline, 5 OOF matches, seeds 0+1:
+
+| window | target spellF1 / macroF1 | stoppage family / macroF1 / aliveDeadF1 | nominal family / macroF1 |
+|---|---|---|---|
+| smooth25 | 0.1996 / 0.675 | 0.2340 / 0.667 / 0.829 | 0.1609 / 0.411 |
+| smooth50 | 0.2433 / 0.672 | 0.2665 / 0.647 / 0.816 | 0.2165 / 0.380 |
+| smooth125 | 0.2242 / 0.636 | 0.2084 / 0.548 / 0.765 | 0.1941 / 0.361 |
+
+- **macroF1.** `stoppage` brings it to the target's level (0.55–0.67 vs 0.64–0.68) and keeps the
+  target's ordering (25 > 50 > 125).
+- **spellF1.** smooth50 is still best, but 25 and 125 swap. Selection metric (mean of nominal and
+  stoppage): 0.1975 / 0.2415 / 0.2013.

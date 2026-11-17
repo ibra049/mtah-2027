@@ -32,7 +32,7 @@ def load_cfg(path=DEFAULT_CFG) -> dict:
     return cfg
 
 
-PROFILES = ("nominal", "harsh")
+PROFILES = ("nominal", "harsh", "stoppage")
 
 
 def load_profile(name, path=DEFAULT_CFG) -> dict:
@@ -44,6 +44,7 @@ def load_profile(name, path=DEFAULT_CFG) -> dict:
     cfg.pop("profiles")
     cfg.update(_strip(prof.get("overrides", {})))
     cfg["randomize"] = _strip(prof.get("randomize", {}))
+    cfg["randomize_log"] = _strip(prof.get("randomize_log", {}))
     cfg["profile"] = name
     return cfg
 
@@ -51,7 +52,9 @@ def load_profile(name, path=DEFAULT_CFG) -> dict:
 def draw_params(cfg, rng):
     """Draw every randomised (ASSUMPTION) parameter uniformly from its range. FACT params fixed."""
     drawn = {k: float(rng.uniform(lo, hi)) for k, (lo, hi) in sorted(cfg.get("randomize", {}).items())}
-    out = {k: v for k, v in cfg.items() if k != "randomize"}
+    drawn.update({k: float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+                  for k, (lo, hi) in sorted(cfg.get("randomize_log", {}).items())})
+    out = {k: v for k, v in cfg.items() if k not in ("randomize", "randomize_log")}
     out.update(drawn)
     return out, drawn
 
@@ -74,13 +77,14 @@ def _ball_hazard_logit(seq, cfg):
 
 
 def _gilbert(u_start, u_stop, p_start, p_stop):
-    """Two-state burst chain; p_start per-frame array, p_stop scalar. Returns missing mask."""
+    """Two-state burst chain; p_start per-frame array, p_stop scalar or per-frame array."""
     T = len(u_start)
     miss = np.zeros(T, bool)
     state = False
+    ps = np.broadcast_to(np.asarray(p_stop, float), (T,))
     for t in range(T):
         if state:
-            if u_stop[t] < p_stop:
+            if u_stop[t] < ps[t]:
                 state = False
         elif u_start[t] < p_start[t]:
             state = True
@@ -135,6 +139,10 @@ def ball_dropout(seq, rng, cfg):
     # ball_dead_mult = ACHIEVED missing-rate ratio dead/alive (not a hazard multiplier: dead
     # stretches have few players near a still ball, which dilutes any hazard multiplier).
     # Alternate: base offset -> overall missing share; dead offset -> dead/alive ratio.
+    if cfg.get("ball_dead_gap_mean_s"):
+        # long gaps in stoppages: once lost in a dead stretch the ball stays lost for most of it
+        p_stop = np.where(dead, 1.0 / (cfg["ball_dead_gap_mean_s"] * FPS), p_stop)
+
     def run(base, off):
         return _gilbert(u1, u2, np.minimum(np.exp(base + logit + off * dead), 1.0), p_stop)
 
