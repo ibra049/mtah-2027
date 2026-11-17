@@ -23,9 +23,13 @@ All lanes code against these. Changes go through the captain session only. Team 
 | `extra` | dict[str, ndarray] | lane-specific arrays (provider slot indices, raw DFL flags, drawn noise parameters). Nothing outside the owning lane may depend on it |
 
 ## Label definition for external data
-`mtah.relabel.min_control(y, tau)` with `tau` from `configs/labels.json` (working value 2.0 s; the
-captain freezes it). Raw DFL `BallPossession` flips on every touch and is never a training or
-tuning target. See `docs/label_semantics.md`.
+`mtah.relabel.min_control(y, tau)`, see `docs/label_semantics.md` and `configs/labels.json`.
+Raw DFL `BallPossession` flips on every touch and is never a training or tuning target.
+- **Models train on `min_control(0.5 s)`** (`min_control_tau_s`): physical ball ownership with
+  sub-half-second flicker removed.
+- **The granularity of "controlled possession" is one decoder parameter** (minimum duration of an
+  opponent run that counts as a change). The target's granularity is uncertain, so decoders are
+  scored on the label views `eval_taus_s` = 0.5, 1.0, 2.0 s and chosen by minimax regret over them.
 
 ## Functions
 - `mtah.io_target.load(data_dir) -> [Sequence, Sequence]` — exactly the two graded blocks `[11185..90651]`, `[110808..190197]` (constants from `third_party/mtah_challenge/games.py`). Frame mapping: video_frame = ATD frame id − 1. Also exposes, per half, the start frame of the `Kick Off (Start)` Smart Tag window.
@@ -41,6 +45,8 @@ tuning target. See `docs/label_semantics.md`.
 
 ## Evaluation protocol (the only numbers that decide anything)
 - Predictions: leave-one-match-out out-of-fold over the 5 non-holdout matches (J03WMX J03WN1 J03WOH J03WOY J03WPY), `~/mtah-external/preds/<model>/oof/<profile>_<seed>/<match>_<period>.npz`. Holdout (J03WQQ J03WR9) predictions live in a separate folder and are scored once, by the captain, on the locked candidate.
-- Selection metric: mean official spellF1 over the 5 matches, degraded profile `nominal`, seeds 0 and 1 averaged, labels = `min_control(tau)`. Reported beside it: `harsh`, `tau = 3.0 s`, per-match values, predicted/true possession count, alive-dead F1, transition latency.
-- A component is adopted only if its paired gain is ≥ +0.01 on the mean and non-negative on at least 4 of 5 matches.
+- Selection metric (`scripts/eval_external.py`, column `family`): mean over the three label views of the mean official spellF1 over the 5 matches, degraded profile `nominal`, seeds 0 and 1 averaged. Reported beside it: each view, `harsh`, predicted/true possession count, alive-dead F1, transition latency.
+- A component is adopted only if its paired gain on `family` is ≥ +0.01 on the mean and non-negative on at least 4 of 5 matches.
+- Decoder: at most four tuned parameters (minimum possession, minimum dead stretch, switch cost, boundary offset), coarse grid, plateau centre; final choice by minimax regret over the label views.
+- Error budget that sets priorities (DFL label structure, each error alone): team-change boundaries 12 frames late cost 0.07–0.21; wrong team on 10% of spells 0.14; one opposite-team blip per minute 0.11; possessions under 1 s missed 0.13; alive/dead boundaries 12 frames late 0.03; stoppages under 6 s missed 0.02.
 - The public 5-minute window of the target is a breakage check with pass/fail flags only. It never ranks two versions.
