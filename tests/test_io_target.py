@@ -298,3 +298,16 @@ def test_tag_stats_masks():
     assert m["def_H"].nonzero()[0].tolist() == [5, 6, 7]
     assert m["any"].all()
     assert slug("Kick Off (Start)") == "KICK_OFF_START" and slug("Throw-in") == "THROW_IN"
+
+
+def test_tag_agreement_ball_split():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.check_candidate import tag_agreement
+    phase = io_target.load_config()["tag_phase"]
+    codes = np.array([0, 0, 1, 1, 2, 0], dtype=np.int8)
+    ball = np.array([1, 0, 1, 0, 1, 1], dtype=bool)
+    tags = np.array([(0, 6, "BUILD UP", "H", "", "")], dtype=TAG_DTYPE)
+    out = tag_agreement(codes, tags, phase, ball=ball)
+    assert out["attacking"] == (5, 0.6)
+    assert out["attacking|ball"] == (3, 2 / 3)      # frames 0,2,5 -> H,A,H
+    assert out["attacking|noball"] == (2, 0.5)      # frames 1,3 -> H,A
