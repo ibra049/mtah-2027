@@ -254,8 +254,11 @@ def fit(seqs, cfg=None) -> dict:
     return fit_arrays(Xs, Ys, names, cfg)
 
 
+PREDICT_THREADS = 1                 # the shipped pipeline predicts on one thread (CONTRACT: portability)
+
+
 def _raw(booster, X):
-    return booster.predict(X, num_threads=1)
+    return booster.predict(X, num_threads=PREDICT_THREADS)
 
 
 def predict_X(art, X, names):

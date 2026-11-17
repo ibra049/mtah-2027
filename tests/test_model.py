@@ -227,3 +227,11 @@ def test_raw_kinematics_token(train):
     assert not any(re.search(p, n) for p in features.RAW_KINEMATICS for n in small["names"])
     assert "n_sp_mean_rel" in small["names"] and "n_bdv_rel" in small["names"]
     assert "n_bspeed" in small["names"]                      # ball speed itself is kept
+
+
+def test_prediction_does_not_depend_on_thread_count(art, test_seq, monkeypatch):
+    one = model.predict_both(art, test_seq)
+    monkeypatch.setattr(model, "PREDICT_THREADS", 4)
+    four = model.predict_both(art, test_seq)
+    np.testing.assert_array_equal(one[0], four[0])
+    np.testing.assert_array_equal(one[1]["turn_onset"], four[1]["turn_onset"])
