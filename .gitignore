@@ -1,0 +1,16 @@
+# competition data must never be committed (not redistributable)
+data/
+*.mp4
+*BAR-ATH*
+mtah-data/
+# local
+.venv/
+vendor/
+__pycache__/
+*.pyc
+.pytest_cache/
+outputs/
+*.npz
+*.parquet
+.DS_Store
+*.egg-info/
