@@ -9,7 +9,7 @@ def _seq():
     ball = np.zeros((T, 3), np.float32)
     ball[450] = [10, 33.5, 0]            # touchline -> throw-in
     z = np.zeros((T, 1, 2), np.float32)
-    return Sequence("SYN", 1, np.arange(T) + 5000, ball, z, z, np.array([105, 68], np.float32), y)
+    return Sequence("SYN", 1, np.arange(T) + 5000, ball, z, z.copy(), np.array([105, 68], np.float32), y)
 
 
 def test_restarts_types_and_window_contains_restart():
@@ -23,3 +23,16 @@ def test_restarts_types_and_window_contains_restart():
     assert len(tags) == 2
     for t, (f, *_r) in zip(tags, rec):
         assert t["start"] <= f < t["end"] and 75 <= t["end"] - t["start"] <= 175
+
+
+def test_phases_attacker_and_defender_codes():
+    cfg = simtags.load_cfg()
+    s = _seq()
+    s.home[:] = -20; s.away[:] = 20            # home attacks +x
+    s.ball[:, 0] = 40.0                        # ball in home's final third
+    rec = simtags.phase_records(s, cfg)
+    codes = {(c, t) for _, _, c, t in rec}
+    assert ("BALL IN FINAL THIRD", "H") in codes and ("DEFENDING IN DEFENSIVE THIRD", "A") in codes
+    # away attacks -x, so the same ball position is its own third
+    assert ("BUILD UP", "A") in codes and ("DEFENDING IN ATTACKING THIRD", "H") in codes
+    assert ("ATTACKING TRANSITION", "A") not in codes   # dead ball between the spells: restart, not turnover

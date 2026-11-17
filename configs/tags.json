@@ -34,5 +34,55 @@
  "window_len_s": [
   3.0,
   7.0
- ]
+ ],
+ "_phases": "Phase tags (DATA.md: 'intervals are phases, not possessions; a Build Up can span one possession, stop short of one, or cover two'). Possessions = min_control(phase_tau_s) of clean labels; split by ball third relative to the attacking team's direction (from team mean x per half). Transition pair for the first transition_s after a turnover in open play. All rates ASSUMPTIONS.",
+ "phase_tau_s": 0.5,
+ "phase_min_s": 2.0,
+ "transition_s": 5.0,
+ "phase_noise": {
+  "clean": {
+   "jitter_s": 0.0,
+   "stop_short": 0.0,
+   "spill": 0.0,
+   "spill_s": [
+    1.0,
+    5.0
+   ],
+   "miss": 0.0,
+   "false_pos_per_half": 0
+  },
+  "nominal": {
+   "jitter_s": 1.5,
+   "stop_short": 0.2,
+   "spill": 0.15,
+   "spill_s": [
+    1.0,
+    5.0
+   ],
+   "miss": 0.15,
+   "false_pos_per_half": 3
+  },
+  "harsh": {
+   "jitter_s": 3.0,
+   "stop_short": 0.35,
+   "spill": 0.3,
+   "spill_s": [
+    1.0,
+    8.0
+   ],
+   "miss": 0.3,
+   "false_pos_per_half": 8
+  }
+ },
+ "_phase_count_per_match": "FACT DATA.md Smart Tagging counts for the target match (density only). Per half: keep the longest phases of each attacking code, N ~ Poisson(count/2); the defending code is kept on the longest of those (paired: BUILD UP<->DEFENDING IN ATTACKING THIRD 22/22, PROGRESSION<->MIDDLE 66/66, FINAL THIRD 93 -> DEFENSIVE THIRD 30, transitions 24/24).",
+ "phase_count_per_match": {
+  "BUILD UP": 22,
+  "PROGRESSION": 66,
+  "BALL IN FINAL THIRD": 93,
+  "ATTACKING TRANSITION": 24,
+  "DEFENDING IN ATTACKING THIRD": 22,
+  "DEFENDING IN MIDDLE THIRD": 66,
+  "DEFENDING IN DEFENSIVE THIRD": 30,
+  "DEFENSIVE TRANSITION": 24
+ }
 }

@@ -1,4 +1,4 @@
-"""Simulated SET PIECES tags for all 14 external halves.
+"""Simulated SET PIECES + phase tags for all 14 external halves.
 ~/mtah-external/cache_tags/<noise>/<seed>/<MATCH>_<P>.npy (TAG_DTYPE, Sequence.frame numbering)
 python scripts/build_sim_tags.py [noise ...] [--seeds 0 1]"""
 import argparse
@@ -20,10 +20,13 @@ for mid in sum(io_idsse.SPLITS.values(), []):
             for seed in a.seeds:
                 rng = np.random.default_rng([20271117, seed, int(seq.period)] + [ord(c) for c in mid + name])
                 tags = simtags.make_tags(seq, cfg, cfg["noise"][name], rng)
+                prng = np.random.default_rng([20271118, seed, int(seq.period)] + [ord(c) for c in mid + name])
+                phases = simtags.make_phase_tags(seq, cfg, cfg["phase_noise"][name], prng)
+                tags = np.sort(np.concatenate([tags, phases]), order="start", kind="stable")
                 p = OUT / name / str(seed) / f"{mid}_{seq.period}.npy"
                 p.parent.mkdir(parents=True, exist_ok=True)
                 np.save(p, tags)
                 if name == "nominal" and seed == 0:
-                    c = collections.Counter(str(t) for t in tags["type"])
+                    c = collections.Counter(str(t) for t in tags["code"])
                     print(mid, seq.period, len(tags), dict(sorted(c.items())), "N:", int((tags["team"] == "N").sum()), flush=True)
 print("DONE", a.noise, a.seeds)
