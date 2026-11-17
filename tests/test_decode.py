@@ -127,7 +127,8 @@ def test_min_poss_is_min_control_on_the_decoded_path():
 
 def test_hard_minimum_inside_the_search_is_still_available():
     p = proba((150, SURE_H), (30, SURE_A), (150, SURE_H))
-    out = dec.decode(p, None, dict(CFG, min_poss=1, hard_min_turn=50, hard_min_restart=50))
+    out = dec.decode(p, None, dict(CFG, switch_cost=5000, min_poss=1, hard_min_turn=50,
+                                   hard_min_restart=50))
     assert runs(out) == [(H, 130), (A, 50), (H, 150)]      # stretched to the minimum, not absorbed
 
 
