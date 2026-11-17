@@ -23,5 +23,28 @@
       "2": 113742
     }
   },
-  "team_name": "Montreal"
+  "team_name": "Montreal",
+  "tag_phase": {
+    "_doc": "Smart Tagging code -> whose ball the Team tag implies, for label-free sanity checks only (mtah.check_candidate). attacking: tagged team has the ball; defending: the other team has it; other: no clear implication.",
+    "attacking": [
+      "BUILD UP",
+      "PROGRESSION",
+      "BALL IN FINAL THIRD",
+      "BALL IN THE BOX",
+      "CREATING CHANCES",
+      "ATTACKING TRANSITION",
+      "LONG BALL",
+      "GOALS",
+      "SET PIECES"
+    ],
+    "defending": [
+      "DEFENDING IN DEFENSIVE THIRD",
+      "DEFENDING IN MIDDLE THIRD",
+      "DEFENDING IN ATTACKING THIRD",
+      "DEFENSIVE TRANSITION"
+    ],
+    "other": [
+      "PLAYERS IN THE BOX"
+    ]
+  }
 }

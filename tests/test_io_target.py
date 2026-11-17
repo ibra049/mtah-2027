@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fixtures import meta_xml, raw_line, random_game, tags_xml, write_game  # noqa: E402
 from mtah import baseline, io_target, submit  # noqa: E402
@@ -230,3 +230,84 @@ def test_submit(tmp_path):
     bad.write_text("frame,label\n" + "".join(f"{i},H\n" for i in range(n - 1)))
     assert submit.validate(str(bad), n) is not None
     assert submit.render(np.array(["h"] * n), cfg) == submit.render(codes, cfg)
+
+
+def test_tag_agreement():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.check_candidate import tag_agreement
+    phase = io_target.load_config()["tag_phase"]
+    codes = np.array([0, 0, 0, 1, 2, 3, 1, 1, 1, 0], dtype=np.int8)   # H H H A D X A A A H
+    tags = np.array([(0, 4, "BUILD UP", "H", "", ""),               # alive H,H,H,A -> 3/4 agree
+                     (6, 10, "DEFENDING IN MIDDLE THIRD", "H", "", ""),  # want A: A,A,A,H -> 3/4
+                     (0, 10, "SET PIECES", "N", "", ""),            # N: ignored
+                     (0, 10, "PLAYERS IN THE BOX", "H", "", "")],   # other: ignored
+                    dtype=TAG_DTYPE)
+    out = tag_agreement(codes, tags, phase)
+    assert out["attacking"] == (4, 0.75) and out["defending"] == (4, 0.75)
+    assert out["code:BUILD_UP"] == (4, 0.75) and "code:SET_PIECES" not in out
+
+
+def _pipeline_fixture(tmp_path):
+    rng = np.random.default_rng(7)
+    T = 600
+    sides = [0] * 5 + [1] * 5
+    P, B = random_game(rng, T, sides, p_ball_missing=0.3)
+    # kickoff tag of half 2 starts at frame 350 (14 s); half 1 has no kickoff tag
+    tx = tags_xml([(14.0, 18.0, "SET PIECES", {"Type": "Kick Off (Start)", "Half": "2nd Half"})])
+    write_game(str(tmp_path), P, B, sides, tags_xml=tx)
+    cfg = small_cfg(T, 300, [[50, 249], [300, 549]])
+    seqs, info = io_target.load(str(tmp_path), cfg, return_meta=True)
+    return seqs, info["tags"], cfg
+
+
+def test_predict_pipeline(tmp_path):
+    from mtah import predict
+    seqs, tags, cfg = _pipeline_fixture(tmp_path)
+    conf = {"method": "pipeline", "kickoff_rule": True,
+            "model": {"module": "stub_components", "artefact": "models/none", "cfg": {"eps": 0.2}},
+            "decoder": {"module": "stub_components", "cfg": {}}}
+    lab = predict.run_pipeline(seqs, tags, conf, cfg)
+    assert lab.shape == (600,)
+    assert (lab[:50] == -1).all() and (lab[250:300] == -1).all() and (lab[550:] == -1).all()
+    assert (lab[300:350] == 2).all()                       # forced D before the kickoff tag
+    assert np.isin(lab[50:250], [0, 1, 2]).all() and np.isin(lab[350:550], [0, 1, 2]).all()
+    # argmax decoder (decoder: null) gives the same here, and is deterministic
+    conf2 = dict(conf, decoder=None)
+    assert np.array_equal(predict.run_pipeline(seqs, tags, conf2, cfg), lab)
+    # a decoder that ignores the forced frames is rejected
+    bad = dict(conf, decoder={"module": "stub_components", "cfg": {"ignore_forced": True}})
+    with pytest.raises(ValueError):
+        predict.run_pipeline(seqs, tags, bad, cfg)
+    # kickoff rule off -> nothing forced
+    off = predict.run_pipeline(seqs, tags, dict(conf, kickoff_rule=False), cfg)
+    assert not (off[300:350] == 2).all()
+
+
+def test_tag_stats_masks():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.tag_stats import masks, slug
+    phase = io_target.load_config()["tag_phase"]
+    tags = np.array([(0, 4, "BUILD UP", "H", "", ""),
+                     (2, 6, "PROGRESSION", "A", "", ""),
+                     (5, 8, "DEFENDING IN MIDDLE THIRD", "H", "", ""),
+                     (0, 10, "SET PIECES", "N", "Throw-in", ""),
+                     (9, 12, "LONG BALL", "A", "", "")], dtype=TAG_DTYPE)
+    m = masks(tags, 10, phase)
+    assert m["att_H"].nonzero()[0].tolist() == [0, 1, 2, 3]
+    assert m["att_A"].nonzero()[0].tolist() == [2, 3, 4, 5, 9]
+    assert m["def_H"].nonzero()[0].tolist() == [5, 6, 7]
+    assert m["any"].all()
+    assert slug("Kick Off (Start)") == "KICK_OFF_START" and slug("Throw-in") == "THROW_IN"
+
+
+def test_tag_agreement_ball_split():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.check_candidate import tag_agreement
+    phase = io_target.load_config()["tag_phase"]
+    codes = np.array([0, 0, 1, 1, 2, 0], dtype=np.int8)
+    ball = np.array([1, 0, 1, 0, 1, 1], dtype=bool)
+    tags = np.array([(0, 6, "BUILD UP", "H", "", "")], dtype=TAG_DTYPE)
+    out = tag_agreement(codes, tags, phase, ball=ball)
+    assert out["attacking"] == (5, 0.6)
+    assert out["attacking|ball"] == (3, 2 / 3)      # frames 0,2,5 -> H,A,H
+    assert out["attacking|noball"] == (2, 0.5)      # frames 1,3 -> H,A

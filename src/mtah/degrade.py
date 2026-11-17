@@ -15,14 +15,48 @@ from pathlib import Path
 
 import numpy as np
 
-from .canonical import FPS, Sequence
+from .canonical import D, FPS, Sequence
 
 DEFAULT_CFG = Path(__file__).resolve().parents[2] / "configs" / "degrade.json"
 
 
+def _strip(d):
+    return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
 def load_cfg(path=DEFAULT_CFG) -> dict:
+    """Base (fixed, single-draw) config. Profiles are ignored here: behaviour unchanged."""
     with open(path) as f:
-        return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+        cfg = _strip(json.load(f))
+    cfg.pop("profiles", None)
+    return cfg
+
+
+PROFILES = ("nominal", "harsh", "stoppage")
+
+
+def load_profile(name, path=DEFAULT_CFG) -> dict:
+    """Base config + profile overrides; cfg["randomize"] = {param: [lo, hi]} drawn per sequence."""
+    with open(path) as f:
+        raw = json.load(f)
+    prof = raw["profiles"][name]
+    cfg = _strip(raw)
+    cfg.pop("profiles")
+    cfg.update(_strip(prof.get("overrides", {})))
+    cfg["randomize"] = _strip(prof.get("randomize", {}))
+    cfg["randomize_log"] = _strip(prof.get("randomize_log", {}))
+    cfg["profile"] = name
+    return cfg
+
+
+def draw_params(cfg, rng):
+    """Draw every randomised (ASSUMPTION) parameter uniformly from its range. FACT params fixed."""
+    drawn = {k: float(rng.uniform(lo, hi)) for k, (lo, hi) in sorted(cfg.get("randomize", {}).items())}
+    drawn.update({k: float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+                  for k, (lo, hi) in sorted(cfg.get("randomize_log", {}).items())})
+    out = {k: v for k, v in cfg.items() if k not in ("randomize", "randomize_log")}
+    out.update(drawn)
+    return out, drawn
 
 
 # ---------------------------------------------------------------- ball dropout
@@ -43,18 +77,45 @@ def _ball_hazard_logit(seq, cfg):
 
 
 def _gilbert(u_start, u_stop, p_start, p_stop):
-    """Two-state burst chain; p_start per-frame array, p_stop scalar. Returns missing mask."""
+    """Two-state burst chain; p_start per-frame array, p_stop scalar or per-frame array."""
     T = len(u_start)
     miss = np.zeros(T, bool)
     state = False
+    ps = np.broadcast_to(np.asarray(p_stop, float), (T,))
     for t in range(T):
         if state:
-            if u_stop[t] < p_stop:
+            if u_stop[t] < ps[t]:
                 state = False
         elif u_start[t] < p_start[t]:
             state = True
         miss[t] = state
     return miss
+
+
+def _bisect(f, target, lo, hi, n=16):
+    """f increasing; returns x with f(x) ~ target."""
+    for _ in range(n):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if f(mid) < target else (lo, mid)
+    return 0.5 * (lo + hi)
+
+
+def ball_dropout_alive(seq, rng, cfg):
+    """For sources whose clean ball is already missing in stoppages (Metrica sample): keep those
+    gaps, and solve the base hazard so the missing share over ALIVE frames (y in H/A), counting
+    existing gaps, equals ball_missing_frac. Returns the NEW missing mask only."""
+    T = len(seq)
+    logit = _ball_hazard_logit(seq, cfg)
+    p_stop = 1.0 / (cfg["ball_gap_mean_s"] * FPS)
+    u1, u2 = rng.random(T), rng.random(T)
+    alive = np.isin(seq.y, (0, 1))
+    existing = np.isnan(seq.ball[:, 0])
+
+    def run(base):
+        return _gilbert(u1, u2, np.minimum(np.exp(base + logit), 1.0), p_stop)
+
+    base = _bisect(lambda b: (run(b) | existing)[alive].mean(), cfg["ball_missing_frac"], -12.0, 2.0, n=18)
+    return run(base)
 
 
 def ball_dropout(seq, rng, cfg):
@@ -63,14 +124,37 @@ def ball_dropout(seq, rng, cfg):
     p_stop = 1.0 / (cfg["ball_gap_mean_s"] * FPS)
     u1, u2 = rng.random(T), rng.random(T)
     target = cfg["ball_missing_frac"]
-    lo, hi = -12.0, 2.0     # bisection on the base log-hazard to hit the published missing share
-    for _ in range(18):
-        mid = 0.5 * (lo + hi)
-        p_start = np.minimum(np.exp(mid + logit), 1.0)
-        frac = _gilbert(u1, u2, p_start, p_stop).mean()
-        lo, hi = (mid, hi) if frac < target else (lo, mid)
-    p_start = np.minimum(np.exp(0.5 * (lo + hi) + logit), 1.0)
-    return _gilbert(u1, u2, p_start, p_stop)
+    ratio = cfg.get("ball_dead_mult", 1.0)
+    dead = seq.y == D
+    if ratio == 1.0 or not dead.any() or dead.all():
+        lo, hi = -12.0, 2.0     # bisection on the base log-hazard to hit the published missing share
+        for _ in range(18):
+            mid = 0.5 * (lo + hi)
+            p_start = np.minimum(np.exp(mid + logit), 1.0)
+            frac = _gilbert(u1, u2, p_start, p_stop).mean()
+            lo, hi = (mid, hi) if frac < target else (lo, mid)
+        p_start = np.minimum(np.exp(0.5 * (lo + hi) + logit), 1.0)
+        return _gilbert(u1, u2, p_start, p_stop)
+
+    # ball_dead_mult = ACHIEVED missing-rate ratio dead/alive (not a hazard multiplier: dead
+    # stretches have few players near a still ball, which dilutes any hazard multiplier).
+    # Alternate: base offset -> overall missing share; dead offset -> dead/alive ratio.
+    if cfg.get("ball_dead_gap_mean_s"):
+        # long gaps in stoppages: once lost in a dead stretch the ball stays lost for most of it
+        p_stop = np.where(dead, 1.0 / (cfg["ball_dead_gap_mean_s"] * FPS), p_stop)
+
+    def run(base, off):
+        return _gilbert(u1, u2, np.minimum(np.exp(base + logit + off * dead), 1.0), p_stop)
+
+    def r_of(m):
+        return m[dead].mean() / max(m[~dead].mean(), 1e-6)
+
+    off, base = 0.0, 0.0
+    for _ in range(3):
+        base = _bisect(lambda b: run(b, off).mean(), target, -12.0, 2.0)
+        off = _bisect(lambda o: r_of(run(base, o)), ratio, -6.0, 6.0)
+    base = _bisect(lambda b: run(b, off).mean(), target, -12.0, 2.0)
+    return run(base, off)
 
 
 # ---------------------------------------------------------------- players
@@ -175,18 +259,69 @@ def degrade_team(pos, rng, cfg):
     return out
 
 
+# ---------------------------------------------------------------- rare tracker errors
+def false_ball(ball, seq, rng, cfg):
+    """Spurious ball detections: short bursts at a wrong position (near a random visible player
+    -- heads/shoes -- or anywhere on the pitch). Overwrites present or missing frames alike."""
+    rate = cfg.get("false_ball_per_min", 0.0)
+    if rate <= 0:
+        return ball
+    T = len(ball)
+    lo, hi = cfg["false_ball_len_frames"]
+    players = np.concatenate([seq.home, seq.away], 1)
+    L_pitch, W_pitch = (float(x) for x in seq.pitch)
+    for _ in range(rng.poisson(rate * T / FPS / 60.0)):
+        t0 = int(rng.integers(0, T))
+        L = int(rng.integers(lo, hi + 1))
+        vis = np.flatnonzero(~np.isnan(players[t0, :, 0]))
+        if len(vis) and rng.random() < cfg["false_ball_near_player_prob"]:
+            xy = players[t0, int(rng.choice(vis))] + rng.normal(0, 0.5, 2)
+        else:
+            xy = rng.uniform([-L_pitch / 2, -W_pitch / 2], [L_pitch / 2, W_pitch / 2])
+        ball[t0:t0 + L, :2] = xy.astype(np.float32)
+    return ball
+
+
+def wrong_team(home, away, rng, cfg):
+    """Each tracklet (maximal non-NaN run in a slot) is put in the other team's slots with
+    prob wrong_team_prob, if a slot there is free over the run (+ reuse gap)."""
+    p = cfg.get("wrong_team_prob", 0.0)
+    if p <= 0:
+        return home, away
+    gap = int(cfg["slot_reuse_gap_frames"])
+    moves = []
+    for src_name, src in (("home", home), ("away", away)):
+        for k in range(src.shape[1]):
+            for s0, e0 in _runs(~np.isnan(src[:, k, 0])):
+                if rng.random() < p:
+                    moves.append((src_name, k, int(s0), int(e0)))
+    teams = {"home": home, "away": away}
+    for src_name, k, s0, e0 in moves:
+        src = teams[src_name]
+        dst = teams["away" if src_name == "home" else "home"]
+        a, b = max(0, s0 - gap), min(len(dst), e0 + gap)
+        free = np.flatnonzero(np.all(np.isnan(dst[a:b, :, 0]), axis=0))
+        if not len(free):
+            continue
+        j = int(rng.choice(free))
+        dst[s0:e0, j] = src[s0:e0, k]
+        src[s0:e0, k] = np.nan
+    return home, away
+
+
 # ---------------------------------------------------------------- entry point
 def apply(seq: Sequence, rng: np.random.Generator, cfg: dict) -> Sequence:
     out = seq.copy()
-    miss = ball_dropout(seq, rng, cfg)
+    miss = ball_dropout_alive(seq, rng, cfg) if cfg.get("ball_target_alive") else ball_dropout(seq, rng, cfg)
     ball = seq.ball.copy()
     ball[:, :2] += _ar1((len(seq), 2), rng, cfg["ball_jitter_m"], cfg["jitter_rho"])
     ball[miss] = np.nan
     if cfg["drop_ball_z"]:
         ball[:, 2] = np.nan
-    out.ball = ball
     out.home = degrade_team(seq.home, rng, cfg)
     out.away = degrade_team(seq.away, rng, cfg)
+    out.ball = false_ball(ball, out, rng, cfg)
+    out.home, out.away = wrong_team(out.home, out.away, rng, cfg)
     out.extra = {k: v for k, v in seq.extra.items() if k in cfg["keep_extra"]}
     return out
 
@@ -196,6 +331,16 @@ def degraded(seq, cfg=None, seed=0):
     cfg = cfg or load_cfg()
     key = [cfg["seed"], seed, int(seq.period)] + [ord(c) for c in seq.match_id]
     return apply(seq, np.random.default_rng(key), cfg)
+
+
+def degraded_profile(seq, profile_cfg, seed=0):
+    """Profile degradation: ASSUMPTION params drawn per sequence. Returns (Sequence, drawn dict).
+    Deterministic in (base seed, seed, profile, match, period)."""
+    key = ([profile_cfg["seed"], seed, int(seq.period)] + [ord(c) for c in seq.match_id]
+           + [ord(c) for c in profile_cfg["profile"]])
+    rng = np.random.default_rng(key)
+    cfg, drawn = draw_params(profile_cfg, rng)
+    return apply(seq, rng, cfg), drawn
 
 
 def summary(seq) -> dict:

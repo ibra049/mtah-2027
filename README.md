@@ -1,24 +1,29 @@
-# Montreal — More Than A Hack 2027, frame-level possession
+# Montreal: More Than A Hack 2027, frame-level possession
 
-Code for team **Montreal**'s entry to the Initial Challenge (FC Barcelona vs Athletic Club,
-per-frame `H` / `A` / `D` possession). Technical note: [docs/Montreal.md](docs/Montreal.md).
+Team **Montreal**'s entry to the Initial Challenge. For every frame of the tactical video of
+FC Barcelona vs Athletic Club, the file gives `H` (Barcelona in possession), `A` (Athletic) or
+`D` (dead ball). The method is in [docs/Montreal.md](docs/Montreal.md).
 
-This repository contains **no match data and no frame-level output** derived from it. The match
-bundle is gated (see the organisers' `DATA.md`). Bring your own copy.
+This repository holds **code only**:
+- No competition data.
+- No frame-level output derived from it.
+- No external dataset.
+
+Licences and data sources are in [LICENSE](LICENSE) and [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## Install
 
-Python 3.12 (macOS / Linux).
+Python **3.12** (macOS or Linux). Every dependency is pinned in `requirements.lock.txt`.
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.lock.txt   # pinned versions
+.venv/bin/pip install -r requirements.lock.txt
 .venv/bin/pip install -e . --no-deps
 ```
 
-## Data bundle
+## Where the data bundle goes
 
-Unpack the official bundle anywhere, keeping its names. Only the tactical source is read:
+Unpack the official bundle anywhere, keeping its file names. Only the tactical source is read:
 
 ```
 <bundle>/
@@ -28,37 +33,83 @@ Unpack the official bundle anywhere, keeping its names. Only the tactical source
    └─ BAR-ATH_tactical_smart_tagging.xml  Smart Tagging (SportsCode XML)
 ```
 
-## Regenerate the submission
+The video, the broadcast recording and the homography are not used.
+
+## Regenerate the submission (single command)
 
 ```bash
-MTAH_DATA=<bundle> PYTHONPATH=src .venv/bin/python -m mtah.predict --config configs/fallback_baseline.json
-# -> <bundle>/out/Montreal.csv   (or pass --data-dir <bundle> --out <file>)
+MTAH_DATA=<bundle> PYTHONPATH=src .venv/bin/python -m mtah.predict --config configs/final.json
 ```
 
-It prints one status line with `valid=1` (the official `validate_submission`) and the file's
-SHA-256. The output is deterministic: the same inputs give the same bytes.
+This writes `<bundle>/out/Montreal.csv` (or pass `--data-dir <bundle> --out <file>`). It prints one
+status line with `valid=1` from the official `validate_submission`, and the file's SHA-256. The
+output is deterministic: the same bundle and repository give the same bytes. Expected:
 
-| config | method | expected SHA-256 of `Montreal.csv` |
-|---|---|---|
-| `configs/fallback_baseline.json` | official nearest-player baseline, ±50-frame majority vote, `X` outside the graded blocks | `678aa2d4bae99a79b478e6275257b3cbac464d55bcdc778eabf9dea1f05c84da` |
+<!-- updated by the captain at each candidate, together with configs/final.json -->
+```
+EXPECTED_SHA256  678aa2d4bae99a79b478e6275257b3cbac464d55bcdc778eabf9dea1f05c84da   configs/final.json = fallback (official smooth50 baseline)
+```
 
-The final method's config and hash will be added here when it is frozen.
-
-## Checks
+## Run the tests
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest -q tests          # synthetic fixtures + Metrica sample game 3
-PYTHONPATH=src .venv/bin/python -m mtah.check_target <bundle>   # parse assertions vs. DATA.md aggregates
-PYTHONPATH=src .venv/bin/python -m mtah.baseline --data-dir <bundle> --check-official
+PYTHONPATH=src .venv/bin/python -m pytest -q tests
 ```
 
-`--check-official` rebuilds the organisers' four published baseline files and compares them
-byte for byte. It needs the official repository checked out at `vendor/challenge/`. The checks
-print only aggregate status lines.
+The tests use synthetic fixtures (with edge cases such as missing ball, empty slots and malformed
+tokens) and need no data. Tests that need the Metrica sample data skip when it is absent. Tests
+that compare against the organisers' starter code skip unless their repository is checked out
+at `vendor/challenge/`.
+
+## Retrain on external data
+
+Training and tuning use **only** the open IDSSE matches (DFL/Sportec, CC BY 4.0) and the Metrica
+sample games. Nothing from the provided match is used. Put the downloaded IDSSE files in
+`~/mtah-external/idsse/` (or set `MTAH_EXTERNAL`). Then:
+
+```bash
+export PYTHONPATH=src
+# 1. parse IDSSE into canonical sequences and build the fixed degraded caches
+#    (profiles nominal, stoppage and harsh; seeds 0 and 1)
+.venv/bin/python scripts/build_degraded_cache.py nominal stoppage harsh --seeds 0 1
+# 2. train with leave-one-match-out, write out-of-fold predictions and the all-5-match model
+#    to models/<name>/
+.venv/bin/python scripts/model_lomo.py --name <name>    # TODO: lands with the model lane merge
+# 3. decode and score with the official metric (team selection table)
+.venv/bin/python scripts/eval_external.py --pred-root <decoded labels dir>
+```
+
+TODO: the exact decode command for step 3 and the name of the shipped model, once the model and
+decoder lanes are merged.
+
+## Checks used during development
+
+```bash
+PYTHONPATH=src .venv/bin/python -m mtah.check_target <bundle>       # parse assertions vs. published aggregates
+PYTHONPATH=src .venv/bin/python -m mtah.check_candidate --data-dir <bundle> --csv <file>
+.venv/bin/python scripts/release_check.py --config configs/final.json
+```
+
+- `check_target` compares the parsed data with aggregates published in the organisers' `DATA.md`:
+  frame count, ball visibility, tag counts and kickoff tags.
+- `check_candidate` summarises a submission without any ground truth: label shares, possession
+  lengths, and agreement with Smart Tagging.
+- `release_check` predicts, validates and reruns for the same SHA-256, then regenerates from a
+  clean clone of `main`.
+
+During development, all three ran against the match data only through `scripts/run_target.sh`,
+which keeps full output private and prints aggregate status lines only (see the technical
+document, "Rule compliance").
 
 ## Layout
 
-- `src/mtah/`: package (interfaces in `CONTRACT.md`). `io_target` parses the tracking and tags,
-  `baseline` is the official baseline, `submit` writes the CSV and `predict` is the entry point.
+- `src/mtah/`: the package; interfaces in [CONTRACT.md](CONTRACT.md).
+  - `io_target`, `io_idsse`: parsers.
+  - `relabel`: label definition.
+  - `degrade`: synthetic automatic-tracking noise.
+  - `baseline`: the organisers' reference method.
+  - `submit`, `predict`: writing the file.
 - `configs/`: every setting used to produce a file.
+- `scripts/`: external-data pipelines, evaluation and release checks.
+- `docs/`: technical document and evidence notes.
 - `third_party/mtah_challenge/`: unmodified official `possession_metrics.py` and `games.py` (MIT).

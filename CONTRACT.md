@@ -29,12 +29,16 @@ Raw DFL `BallPossession` flips on every touch and is never a training or tuning 
   sub-half-second flicker removed.
 - **The granularity of "controlled possession" is one decoder parameter** (minimum duration of an
   opponent run that counts as a change). The target's granularity is uncertain, so decoders are
-  scored on the label views `eval_taus_s` = 0.5, 1.0, 2.0 s and chosen by minimax regret over them.
+  scored on the label views `eval_taus_s` = 0, 0.5, 1.0 s and chosen by minimax regret over them.
+  Evidence (external only): the public Metrica sample games, labelled from the provider's own
+  event definitions, have 12–13% of possessions under 1 s and 25–30% under 2 s, like DFL at
+  tau 0–0.5 s. They are cached as a second development set (`mtah.io_metrica`,
+  `scripts/eval_external.py --metrica`); a candidate must not lose there.
 
 ## Functions
 - `mtah.io_target.load(data_dir) -> [Sequence, Sequence]` — exactly the two graded blocks `[11185..90651]`, `[110808..190197]` (constants from `third_party/mtah_challenge/games.py`). Frame mapping: video_frame = ATD frame id − 1. Also exposes, per half, the start frame of the `Kick Off (Start)` Smart Tag window.
 - `mtah.io_idsse.load(match_id, root) -> list[Sequence]` — labels from BallStatus/BallPossession (raw); relabel is applied by the consumer.
-- `mtah.degrade.apply(seq, rng, cfg) -> Sequence` — clean external tracking → target-like automatic tracking. FACT parameters from published documentation only; ASSUMPTION parameters randomised per sequence. Fixed caches for scoring: `~/mtah-external/cache_deg/<profile>/<seed>/<match>_<period>.npz`, profiles `nominal`, `harsh`, seeds 0, 1.
+- `mtah.degrade.apply(seq, rng, cfg) -> Sequence` — clean external tracking → target-like automatic tracking. FACT parameters from published documentation only; ASSUMPTION parameters randomised per sequence. Fixed caches for scoring: `~/mtah-external/cache_deg/<profile>/<seed>/<match>_<period>.npz`, seeds 0, 1, profiles `nominal` (ball dropout mostly independent of game state), `stoppage` (tracker loses the ball during stoppages: dead/alive missing ratio 2–10x, overall still 40.7%; justified by the published baseline's macroF1, see `docs/proxy_check.md`) and `harsh`. Models train on all three and carry per-half regime descriptors so they can tell the regimes apart from the input alone.
 - `mtah.features.compute(seq) -> (X float32 [T,F], names)` — past and future windows allowed (offline). NaN-robust. Team-symmetric.
 - `mtah.model` — `fit(seqs, cfg) -> artefact`, `predict_proba(artefact, seq) -> float32 [T,3]` (H,A,D). Optional `predict_aux(artefact, seq) -> dict[str, float32 [T]]` (boundary-onset probabilities); consumers must work without it. Deterministic LightGBM settings; artefacts under `models/`.
 - `mtah.decode.decode(proba, seq, cfg, forced=None) -> int8 [T]` in {0,1,2}. `forced`: int8 [T], -1 free, else the label that must be emitted. No game-specific frame numbers inside. Integer costs (`round(-1000·log p)`, p rounded to 1e-4), fixed tie order. Halves decoded independently. Never emits X.
@@ -45,8 +49,8 @@ Raw DFL `BallPossession` flips on every touch and is never a training or tuning 
 
 ## Evaluation protocol (the only numbers that decide anything)
 - Predictions: leave-one-match-out out-of-fold over the 5 non-holdout matches (J03WMX J03WN1 J03WOH J03WOY J03WPY), `~/mtah-external/preds/<model>/oof/<profile>_<seed>/<match>_<period>.npz`. Holdout (J03WQQ J03WR9) predictions live in a separate folder and are scored once, by the captain, on the locked candidate.
-- Selection metric (`scripts/eval_external.py`, column `family`): mean over the three label views of the mean official spellF1 over the 5 matches, degraded profile `nominal`, seeds 0 and 1 averaged. Reported beside it: each view, `harsh`, predicted/true possession count, alive-dead F1, transition latency.
-- A component is adopted only if its paired gain on `family` is ≥ +0.01 on the mean and non-negative on at least 4 of 5 matches.
+- Selection metric (`scripts/eval_external.py`, column `select`): mean over the three label views of the official spellF1, averaged over the `nominal` and `stoppage` profiles, seeds 0 and 1 averaged, mean over the 5 matches. Reported beside it: each view, `harsh`, predicted/true possession count, alive-dead F1, transition latency.
+- A component is adopted only if its paired gain on `select` is ≥ +0.01 on the mean and non-negative on at least 4 of 5 matches.
 - Decoder: at most four tuned parameters (minimum possession, minimum dead stretch, switch cost, boundary offset), coarse grid, plateau centre; final choice by minimax regret over the label views.
 - Error budget that sets priorities (DFL label structure, each error alone): team-change boundaries 12 frames late cost 0.07–0.21; wrong team on 10% of spells 0.14; one opposite-team blip per minute 0.11; possessions under 1 s missed 0.13; alive/dead boundaries 12 frames late 0.03; stoppages under 6 s missed 0.02.
 - The public 5-minute window of the target is a breakage check with pass/fail flags only. It never ranks two versions.
