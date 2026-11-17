@@ -140,7 +140,7 @@ What each profile produces, measured on 14 DFL halves (seed 0, medians). The bal
 `mtah.ball_audit`, the same code as the audit of the provided tracking. Per-half ranges are in
 `docs/degrade_profiles.md`.
 
-| profile | what it models | ball observed | ball missing alive / dead | ball velocity ac1 | Δv ±3 fr q99 (m/s) | player ac1 | player speed (m/s) | stillness | tracklet median |
+| profile | what it models | ball observed | ball missing alive / dead | ball velocity ac1 | Δv ±3 fr q99 (m/s) | player velocity ac1 | player speed (m/s) | stillness | tracklet median |
 |---|---|---|---|---|---|---|---|---|---|
 | clean DFL | reference | 1.000 | 0 / 0 | .35 | 14.8 | .79 | 1.46 | .029 | 2765 s |
 | nominal | facts; loss biased to crowded, aerial and fast play; jitter | .594 | .36 / .48 | −.01 | 19.0 | .29 | 3.24 | 0 | 18.5 s |
@@ -151,6 +151,11 @@ What each profile produces, measured on 14 DFL halves (seed 0, medians). The bal
 | nominal_sm | _lj + tracker filter (ball σ 1–8 fr, players 1–4 fr, gap fill 0.5–2 s), tracklets 10–300 s | .595 | .32 / .49 | .98 | 12.0 | 1.00 | 1.41 | .024 | 42.5 s |
 | stoppage_sm | the same on stoppage | .594 | .11 / .71 | .97 | 11.5 | 1.00 | 1.42 | .025 | 33.2 s |
 | gapstress | stress: alive gaps 25–40% (3–5 s) and dead loss 80–98% | .407 | .35 / .86 | .08 | 18.9 | .20 | 3.64 | 0 | 15.8 s |
+
+Player velocity ac1 is the lag-1 autocorrelation of 1-frame velocity components, the median
+over halves. A few position jumps in a half (substitutions, feed glitches) pull that half's
+value down, which is why clean DFL ranges from .40 to .99 per half. All rows are medians
+computed the same way, so the rows compare.
 
 Every profile holds the documented facts fixed: ball missing 40.7% (50% in harsh, more in
 gapstress by design), about 20.5 visible objects for 22 players, 46 slots without identities,
