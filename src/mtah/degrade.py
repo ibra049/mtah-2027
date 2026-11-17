@@ -114,7 +114,8 @@ def ball_dropout_alive(seq, rng, cfg):
     def run(base):
         return _gilbert(u1, u2, np.minimum(np.exp(base + logit), 1.0), p_stop)
 
-    base = _bisect(lambda b: (run(b) | existing)[alive].mean(), cfg["ball_missing_frac"], -12.0, 2.0, n=18)
+    on = slice(None) if cfg.get("ball_target_overall") else alive
+    base = _bisect(lambda b: (run(b) | existing)[on].mean(), cfg["ball_missing_frac"], -12.0, 2.0, n=18)
     return run(base)
 
 

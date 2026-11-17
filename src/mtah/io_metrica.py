@@ -248,3 +248,66 @@ def load_events_with_player(game, root=ROOT):
         js = json.load(open(d / f"Sample_Game_{game}_events.json"))["data"]
         ev["player"] = [(e.get("from") or {}).get("id") or "" for e in js]
     return ev
+
+
+# ------------------------------------------------------------------ touch events (same format as DFL)
+KIND = {"PASS": "pass", "SHOT": "shot", "CARRY": "carry", "BALL LOST": "other_touch",
+        "CHALLENGE": "duel", "BALL OUT": "other_touch"}
+
+
+def _kind(t, sub):
+    if t == "SET PIECE":
+        for key, k in (("KICK OFF", "setpiece_kickoff"), ("THROW IN", "setpiece_throwin"),
+                       ("CORNER", "setpiece_corner"), ("PENALTY", "setpiece_penalty")):
+            if key in sub:
+                return k
+        return "setpiece_freekick"
+    if t == "PASS" and "GOAL KICK" in sub:
+        return "setpiece_goalkick"
+    if t == "PASS" and "CROSS" in sub:
+        return "cross"
+    if t == "RECOVERY":
+        return "duel" if "THEFT" in sub else "claim"
+    return KIND.get(t)
+
+
+def build_events(game, near_m=1.5, half_w=25):
+    """Provider events aligned to the ball track like DFL's (io_idsse_events.EVENT_DTYPE):
+    touch frame = max ball velocity change while the event's player is within near_m of the ball,
+    within +-half_w frames of the annotated start frame. CHALLENGE rows keep only the WON side
+    (team = winner). -> {period: structured array}."""
+    from .io_idsse_events import EVENT_DTYPE, kick_score
+    from .canonical import A, H
+    seqs = {s.period: s for s in load(game)}
+    ev = load_events_with_player(game)
+    slots = player_slots(game)
+    out = {}
+    for p, s in seqs.items():
+        k = kick_score(s.ball[:, :2])
+        f0 = int(s.frame[0])
+        rows = []
+        for _, r in ev[ev["period"] == p].iterrows():
+            kind = _kind(r["type"], r["subtype"])
+            if kind is None or (r["type"] == "CHALLENGE" and "WON" not in r["subtype"]):
+                continue
+            i = int(r["start"]) - f0
+            if not 0 <= i < len(s):
+                continue
+            team = H if r["team"] == "H" else A
+            dist, ok, a = np.nan, 0, i
+            if r["player"] in slots:
+                side, j = slots[r["player"]]
+                pl = (s.home if side == "home" else s.away)[:, j]
+                lo, hi = max(0, i - half_w), min(len(s), i + half_w + 1)
+                d = np.linalg.norm(pl[lo:hi] - s.ball[lo:hi, :2], axis=1)
+                near = d < near_m
+                if near.any():
+                    a = lo + int(np.argmax(np.where(near, k[lo:hi], -1)))
+                    dist, ok = float(d[a - lo]), 1
+                elif not np.all(np.isnan(d)):
+                    a = lo + int(np.nanargmin(d)); dist = float(d[a - lo])
+            rows.append((int(s.frame[a]), int(r["start"]), (int(r["start"]) - f0) / 25.0, team, kind,
+                         str(r["player"])[:16], -1, dist, ok))
+        rows.sort(key=lambda x: x[0])
+        out[p] = np.array(rows, dtype=EVENT_DTYPE)
+    return out
