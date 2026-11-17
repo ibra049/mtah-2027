@@ -78,32 +78,61 @@ def argmax_decode(proba, forced):
     return np.where(forced >= 0, forced, lab).astype(np.int8)
 
 
+class Components:
+    """Loaded (model, decoder) pair. The ONE code path used on both domains (target halves and
+    external / degraded halves): predict_sequence(seq, forced)."""
+
+    def __init__(self, config: dict):
+        self.model_mod, self.artefact = load_model(config["model"])
+        self.dec_mod, self.dec_cfg = load_decoder(config.get("decoder"))
+        self.use_aux = bool(config.get("use_aux", False))
+
+    def proba_aux(self, seq):
+        if self.use_aux and hasattr(self.model_mod, "predict_both"):
+            proba, aux = self.model_mod.predict_both(self.artefact, seq)
+        else:
+            proba, aux = self.model_mod.predict_proba(self.artefact, seq), None
+        return np.asarray(proba, dtype=np.float32), aux
+
+    def decode(self, proba, seq, forced, aux=None):
+        if self.dec_mod is None:
+            return argmax_decode(proba, forced)
+        kwargs = {"forced": forced}
+        if aux is not None:
+            import inspect
+            if "aux" in inspect.signature(self.dec_mod.decode).parameters:
+                kwargs["aux"] = aux
+        return np.asarray(self.dec_mod.decode(proba, seq, self.dec_cfg, **kwargs), dtype=np.int8)
+
+    def predict_sequence(self, seq, forced=None):
+        """-> (labels int8 [T], status dict). forced: int8 [T] (-1 free) or None (= all free)."""
+        if forced is None:
+            forced = np.full(len(seq), -1, dtype=np.int8)
+        proba, aux = self.proba_aux(seq)
+        ok = (proba.shape == (len(seq), 3) and bool(np.isfinite(proba).all())
+              and bool(np.allclose(proba.sum(1), 1.0, atol=1e-3)) and bool((proba >= 0).all()))
+        if not ok:
+            return None, dict(proba_ok=0)
+        lab = self.decode(proba, seq, forced, aux)
+        valid = lab.shape == (len(seq),) and bool(np.isin(lab, [0, 1, 2]).all())
+        respected = bool(((forced < 0) | (lab == forced)).all()) if valid else False
+        return lab, dict(proba_ok=1, forced_frames=int((forced >= 0).sum()),
+                         decoded_valid=int(valid), forced_respected=int(respected))
+
+
 def run_pipeline(seqs, tags, config: dict, tcfg: dict) -> np.ndarray:
     """Labels for the whole video: int8 [n_frames], -1 (X) outside the sequences."""
     from mtah import io_target
-    model_mod, artefact = load_model(config["model"])
-    dec_mod, dec_cfg = load_decoder(config.get("decoder"))
+    comp = Components(config)
     kick = io_target.kickoff_frames(tags, tcfg) if config.get("kickoff_rule", True) else {}
     labels = np.full(tcfg["n_frames"], -1, dtype=np.int8)
     for seq in seqs:
         k = kick.get(seq.period)
-        forced = kickoff_forced(seq, k)
-        proba = np.asarray(model_mod.predict_proba(artefact, seq), dtype=np.float32)
-        ok = (proba.shape == (len(seq), 3) and bool(np.isfinite(proba).all())
-              and bool(np.allclose(proba.sum(1), 1.0, atol=1e-3)) and bool((proba >= 0).all()))
-        if not ok:
-            say(period=seq.period, proba_ok=0)
+        lab, st = comp.predict_sequence(seq, kickoff_forced(seq, k))
+        say(period=seq.period, kickoff_tag_found=int(k is not None), **st)
+        if not st["proba_ok"]:
             raise ValueError("predict_proba returned an invalid array")
-        if dec_mod is None:
-            lab = argmax_decode(proba, forced)
-        else:
-            lab = np.asarray(dec_mod.decode(proba, seq, dec_cfg, forced=forced), dtype=np.int8)
-        valid = lab.shape == (len(seq),) and bool(np.isin(lab, [0, 1, 2]).all())
-        respected = bool(((forced < 0) | (lab == forced)).all()) if valid else False
-        say(period=seq.period, proba_ok=1, kickoff_tag_found=int(k is not None),
-            forced_frames=int((forced >= 0).sum()), decoded_valid=int(valid),
-            forced_respected=int(respected))
-        if not (valid and respected):
+        if not (st["decoded_valid"] and st["forced_respected"]):
             raise ValueError("decoder output invalid or ignores forced frames")
         labels[seq.frame] = lab
     return labels

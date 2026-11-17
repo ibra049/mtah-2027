@@ -15,7 +15,7 @@ export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 [ -d "$PWD/.venv/bin" ] && export PATH="$PWD/.venv/bin:$PATH"
 mkdir -p "$MTAH_DATA/logs"
 ts=$(date +%Y%m%d-%H%M%S)
-log="$MTAH_DATA/logs/run-$ts.log"
+log="$MTAH_DATA/logs/run-$ts-$$.log"   # PID: two runs in the same second must not share a log
 start=$(date +%s)
 "$@" >"$log" 2>&1
 rc=$?

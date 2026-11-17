@@ -281,3 +281,33 @@ def test_predict_pipeline(tmp_path):
     # kickoff rule off -> nothing forced
     off = predict.run_pipeline(seqs, tags, dict(conf, kickoff_rule=False), cfg)
     assert not (off[300:350] == 2).all()
+
+
+def test_tag_stats_masks():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.tag_stats import masks, slug
+    phase = io_target.load_config()["tag_phase"]
+    tags = np.array([(0, 4, "BUILD UP", "H", "", ""),
+                     (2, 6, "PROGRESSION", "A", "", ""),
+                     (5, 8, "DEFENDING IN MIDDLE THIRD", "H", "", ""),
+                     (0, 10, "SET PIECES", "N", "Throw-in", ""),
+                     (9, 12, "LONG BALL", "A", "", "")], dtype=TAG_DTYPE)
+    m = masks(tags, 10, phase)
+    assert m["att_H"].nonzero()[0].tolist() == [0, 1, 2, 3]
+    assert m["att_A"].nonzero()[0].tolist() == [2, 3, 4, 5, 9]
+    assert m["def_H"].nonzero()[0].tolist() == [5, 6, 7]
+    assert m["any"].all()
+    assert slug("Kick Off (Start)") == "KICK_OFF_START" and slug("Throw-in") == "THROW_IN"
+
+
+def test_tag_agreement_ball_split():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.check_candidate import tag_agreement
+    phase = io_target.load_config()["tag_phase"]
+    codes = np.array([0, 0, 1, 1, 2, 0], dtype=np.int8)
+    ball = np.array([1, 0, 1, 0, 1, 1], dtype=bool)
+    tags = np.array([(0, 6, "BUILD UP", "H", "", "")], dtype=TAG_DTYPE)
+    out = tag_agreement(codes, tags, phase, ball=ball)
+    assert out["attacking"] == (5, 0.6)
+    assert out["attacking|ball"] == (3, 2 / 3)      # frames 0,2,5 -> H,A,H
+    assert out["attacking|noball"] == (2, 0.5)      # frames 1,3 -> H,A
