@@ -62,3 +62,61 @@ A second read on it, within the noise band: on degraded dev the reference baseli
 ordering matches the published full-match ordering (smooth50 > smooth125) with raw labels
 (0.225 vs 0.217), but flips with τ=1 s (0.235 vs 0.244) and τ=2 s (0.245 vs 0.278). All gaps are
 below the 0.04 spellF1 noise band, so this is not evidence either way.
+
+## External evidence on τ: the target provider's own definition (Metrica sample games, 2026-11-17)
+
+Source: the 3 public Metrica sample games (same provider as the target). `mtah.io_metrica` labels each
+frame from the provider's event chain, following `documentation/events-definitions.pdf`:
+- **Team:** set by the start of PASS, CARRY, RECOVERY, SHOT, SET PIECE or BALL LOST. CHALLENGE,
+  BALL OUT, FAULT RECEIVED and CARD never change it ("possession is not considered lost when an
+  opposing player's interference does not have a significant impact").
+- **Dead:** from a stoppage until the next on-ball event. Stoppages are BALL OUT, SHOT …OUT/GOAL,
+  FAULT RECEIVED, CHALLENGE …FAULT, BALL LOST FORCED/END HALF and …OFFSIDE.
+
+Script: `scripts/metrica_labels.py --dfl`. Cached as Sequences in `~/mtah-external/cache_metrica/METRICA<g>_<p>.npz`.
+
+**The labels can be trusted:**
+- **Team mapping:** on alive frames with exactly one team within 1.5 m of the ball, the label
+  names that team on 93–95% of frames in all 6 halves (DFL: 87–95%).
+- **Coverage:** 97–99.8% of frames.
+
+**Both dead-ball sources agree:**
+- P(ball missing | event-dead) = 0.92 / 0.98 / 0.99, against P(ball missing | event-alive) = 0.007 / 0.061 / 0.011.
+- 95–97% of stoppages have the ball missing on at least 80% of their frames.
+- Game 2's tracking has 6% gaps during alive play. That is why event-dead is primary;
+  the tracking-dead variant changes the statistics only marginally.
+
+**The 12% of spells under 1 s are real.** 136 of the 142 start with a RECOVERY (INTERCEPTION or
+THEFT) or with a BALL LOST by the team that briefly had the ball. They are lost straight back (89)
+or go out of play (47). This matches the CHALLENGE.md exclusion, which removes only "a deflection
+of a pass that does *not* intercept it".
+
+| source | spells/90 | mean s | median s | <0.25 s | <0.5 s | <1 s | <2 s | <4 s | first 5 min | dead |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Metrica game 1 | 362 | 8.85 | 4.08 | 0.045 | 0.066 | 0.126 | 0.249 | 0.496 | 32 | 0.407 |
+| Metrica game 2 | 347 | 9.72 | 4.56 | 0.064 | 0.069 | 0.128 | 0.297 | 0.444 | 20 | 0.376 |
+| Metrica game 3 | 381 | 9.73 | 4.64 | 0.030 | 0.052 | 0.119 | 0.273 | 0.462 | 20 | 0.313 |
+| DFL τ=0 (7-match mean) | 412 | 7.34 | 3.77 | 0.029 | 0.051 | 0.123 | 0.296 | 0.525 | 30.1 | 0.449 |
+| DFL τ=0.5 s | 386 | 7.84 | 4.09 | 0.001 | 0.008 | 0.081 | 0.255 | 0.490 | 28.3 | 0.449 |
+| DFL τ=1 s | 345 | 8.73 | 4.91 | 0.001 | 0.003 | 0.006 | 0.178 | 0.424 | 24.6 | 0.449 |
+| DFL τ=2 s | 272 | 11.03 | 6.85 | 0.001 | 0.002 | 0.006 | 0.042 | 0.287 | 17.9 | 0.449 |
+| DFL τ=3 s | 224 | 13.43 | 8.82 | 0.001 | 0.002 | 0.006 | 0.034 | 0.177 | 15.4 | 0.449 |
+
+**Reading.**
+- **The provider's possession definition sits at τ ≈ 0–0.5 s, not 2 s.** Its short end (under
+  0.5 / 1 / 2 s: 5–7% / 12–13% / 25–30%) matches raw DFL (5% / 12% / 30%).
+- **The rest of the distribution sits between τ = 0 and τ = 0.5.** Spells per 90 and the median
+  both fall between the two DFL rows.
+- **τ = 2 s does not fit.** It removes almost every spell under 2 s (4% remain, against 25–30%).
+- **The 5-minute count does not decide it.** The published "17 possessions in the first 5
+  minutes" is one window. On Metrica's own games the same window gives 20, 20 and 32.
+
+**Caveats.**
+- **Event chain vs owner flag.** The GT comes from the corrected tracking's owner flag, not from
+  events. The event chain is the provider's documented definition of possession, the closest
+  public proxy.
+- **Annotation timing.** Event timing is annotated, so the shares under 0.25 s are not exact.
+
+**Use.** The cached games are a second development set in the provider's own semantics:
+- labels = the event chain;
+- the tracking is the provider's sample tracking, not degraded DFL.

@@ -29,7 +29,11 @@ Raw DFL `BallPossession` flips on every touch and is never a training or tuning 
   sub-half-second flicker removed.
 - **The granularity of "controlled possession" is one decoder parameter** (minimum duration of an
   opponent run that counts as a change). The target's granularity is uncertain, so decoders are
-  scored on the label views `eval_taus_s` = 0.5, 1.0, 2.0 s and chosen by minimax regret over them.
+  scored on the label views `eval_taus_s` = 0, 0.5, 1.0 s and chosen by minimax regret over them.
+  Evidence (external only): the public Metrica sample games, labelled from the provider's own
+  event definitions, have 12–13% of possessions under 1 s and 25–30% under 2 s, like DFL at
+  tau 0–0.5 s. They are cached as a second development set (`mtah.io_metrica`,
+  `scripts/eval_external.py --metrica`); a candidate must not lose there.
 
 ## Functions
 - `mtah.io_target.load(data_dir) -> [Sequence, Sequence]` — exactly the two graded blocks `[11185..90651]`, `[110808..190197]` (constants from `third_party/mtah_challenge/games.py`). Frame mapping: video_frame = ATD frame id − 1. Also exposes, per half, the start frame of the `Kick Off (Start)` Smart Tag window.

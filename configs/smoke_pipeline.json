@@ -1,0 +1,7 @@
+{
+  "_doc": "Plumbing smoke test of the pipeline path (stub model = soft nearest-player codes, argmax decode, kickoff rule). Never a submission.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "model": {"module": "tests.stub_components", "artefact": "models/none", "cfg": {"eps": 0.2}},
+  "decoder": {"module": "tests.stub_components", "cfg": {}}
+}
