@@ -141,6 +141,21 @@ Against `lgb_v1` + probabilities-only stacker (`v1q`): `v4q` is +0.019 (nominal)
 (harsh) on DFL and +0.035 to +0.048 on every Metrica draw; `v4p` +0.023 / +0.022 and +0.046 to
 +0.058.
 
+**Selection.** `v4p` (`models/stack_lgb_v4p`, `configs/v4p.json`) is the shipped model. The
+onset channel is admissible for `lgb_v4` because the label-free input check puts its onset
+output on the target at about 0.85–0.95 of the external level (about 5.2 onset peaks per minute
+against 4.7–6.8 externally; 95th percentile about 0.095 against 0.099–0.112), far above the half
+strength at which `v4p` stops beating `v4q`. For `lgb_v1` the same check found the onset output
+at about a tenth of its external rate, which is why the probabilities-only stacker was used
+there. `v4q` is kept as the drop-in fallback.
+
+### On `lgb_v4s` (v4 retrained with the smoothed draws, gap descriptors dropped)
+
+Without a stacker `lgb_v4s` equals `lgb_v4` externally (DFL selection value −0.006, Metrica
++0.001; only the smoothed nominal draw improves, +0.009 / +0.012). With the with-onset stacker
+it gains +0.018 over plain `lgb_v4s` (5/5) and, against `v4p`, is equal on the DFL selection
+value (−0.001) and better only on the two smoothed DFL draws (+0.013 and +0.007).
+
 ### Variants tried and rejected
 
 - **Possession-length sample weights** (short possessions weighted up to 4×): recall of 1–2 s

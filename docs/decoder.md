@@ -161,6 +161,38 @@ The difference between the two files is inside the noise (+0.001 select, +0.004 
 made for centrality, not for score. The onset options were retested on v2's onset output and
 stayed below the bar (−0.001 … +0.004).
 
+### Selected pipeline: `lgb_v4` + temporal stacker (`v4p`), frozen decoder
+
+The frame model that is shipped is `lgb_v4` refined by the temporal stacker
+(`docs/stacker.md`); the decoder file is the one frozen on `lgb_v1`. It was re-checked on the
+stacked `v4` probabilities, pooled over the nominal, stoppage and the two smoothed profiles:
+
+| parameter | values tried → family (marginal mean) | frozen |
+|---|---|---|
+| `switch_cost` | 2000 → 0.6836, 3000 → 0.6852, 4500 → 0.6865, 6000 → 0.6868, 9000 → 0.6836 | 3000 |
+| `min_poss` (frames, at switch 3000) | 12 → 0.6865, 19 → 0.6865, 25 → 0.6858 | 19 |
+| `min_dead` (frames) | 50 → 0.6865, 75 → 0.6854, 100 → 0.6836 | 50 |
+
+Paired against the frozen file: switch cost 4500 gains +0.002 on the DFL selection value and
++0.002 on the Metrica games, 6000 the same; a minimum dead stretch of 75 frames loses 0.001 on
+DFL and 0.002 on Metrica. Nothing approaches the +0.01 rule, so the file frozen on the first
+model is kept unchanged for the last one: the decoder parameters did not have to follow the
+model through four generations and a stacker.
+
+Full pipeline through the frozen decoder (family; DFL leave-one-match-out, Metrica never fitted
+on):
+
+| data | official smooth50 baseline | `lgb_v1` | `lgb_v4` | `lgb_v4` + stacker |
+|---|---|---|---|---|
+| DFL nominal | 0.2165 | 0.6469 | 0.6670 | 0.6800 |
+| DFL stoppage | 0.2665 | n/a | 0.6891 | 0.7009 |
+| DFL harsh | 0.1781 | 0.6161 | 0.6307 | 0.6467 |
+| DFL nominal, smoothed tracker | | n/a | 0.6498 | 0.6644 |
+| DFL stoppage, smoothed tracker | | n/a | 0.6827 | 0.7006 |
+| Metrica nominal | 0.2676 | 0.6575 | 0.7134 | 0.7318 |
+| Metrica nominal, smoothed tracker | | 0.6690 (with its stacker) | 0.6887 | 0.7147 |
+| Metrica stoppage, smoothed tracker | | 0.7089 (with its stacker) | 0.7313 | 0.7642 |
+
 ### Where the remaining loss is (view 0.5 s, `lgb_v1`)
 
 - Perfect timing of every boundary the decoder already places: +0.02. Perfect alive/dead: +0.01.
