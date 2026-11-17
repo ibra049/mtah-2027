@@ -3,6 +3,7 @@ Seed 0, all 14 DFL halves per profile; clean DFL as reference. Ball statistics f
 mtah.ball_audit (the code the target audit uses), player statistics from degrade.player_motion,
 stillness from degrade.still_share, missing shares split by the clean alive/dead labels."""
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -37,4 +38,7 @@ for prof in PROFILES:
     rows[prof] = {k: (float(np.nanmedian([v[k] for v in vals])), float(np.nanmin([v[k] for v in vals])),
                       float(np.nanmax([v[k] for v in vals]))) for k in COLS}
     print(prof, " ".join(f"{k}={rows[prof][k][0]:.3g}" for k in COLS), flush=True)
-Path("/private/tmp/claude-501/-Users-ibra-Desktop-mtah-2027-wt-external/fb78e130-6172-4496-b6e7-0d3d5f407bb4/scratchpad/profile_table.json").write_text(json.dumps(rows, indent=1))
+OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "outputs" / "profile_table.json"
+OUT.parent.mkdir(parents=True, exist_ok=True)
+OUT.write_text(json.dumps(rows, indent=1))
+print(f"wrote {OUT}")
