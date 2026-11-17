@@ -78,7 +78,38 @@ existing column needs a new version.
 | version | used by | behaviour |
 |---|---|---|
 | 2 | lgb_v1, lgb_v2 | every tracked object counts; box counts unbounded behind the goal line; one touch stream with an absolute 7 m/s threshold |
-| 3 | lgb_v3, lgb_v4 | objects > 3 m outside the pitch ignored; box counts stop 1 m behind the goal line; touch thresholds relative to the half's own tracking noise (two streams) |
+| 3 | lgb_v3 | objects > 3 m outside the pitch ignored; box counts stop 1 m behind the goal line; touch thresholds relative to the half's own tracking noise (two streams) |
+| 4 | lgb_v4 | **canonical inputs** (below); kinematics on 0.3 s baselines; touch thresholds are quantiles of the half's own velocity changes; nearest-team hold and turn cues; regime descriptors reduced to the ball-gap structure |
+
+### Version 4: canonical inputs
+`features.canonicalize(seq)` runs first, identically on training data and on the target; it is
+part of the algorithm, not a correction of one data set:
+1. objects more than 3 m outside the pitch are removed;
+2. ball gaps shorter than 1.5 s are filled by linear interpolation; longer gaps stay gaps;
+3. ball x,y and every player slot are low-pass filtered within each observed stretch (binomial
+   window over +-6 frames, renormalised at the ends; players are never interpolated across a gap
+   because a slot can hold another person afterwards).
+
+Why: a label-free audit of the target's tracking (target-io lane) showed a ball track that is
+itself low-pass filtered (frame-to-frame velocity autocorrelation 0.998; 0.31 on clean DFL, about
+0 on the jittered training data) and has no short gaps (99.9% of missing-ball frames sit in gaps
+of 4 s or more). A touch spreads its velocity change over many frames there, so a +-3-frame jump
+detector fired about once a minute instead of 20-35 times; no noise-relative threshold can fix a
+difference in the class of signal. After canonicalisation every source has a velocity
+autocorrelation of 0.92-0.99, the per-half touch thresholds land at 6-7 m/s (sensitive stream)
+and 12-13 m/s (strict) on every source, and the detector fires 13-23 times per observed minute.
+
+On top of the canonical tracks:
+- **Touches** = local maxima of the velocity change over +-8 frames above the 0.85 / 0.95
+  quantile of that quantity on a seen, moving ball of the same half; touches hidden in a gap are
+  reconstructed from the velocity before and after it.
+- **Threshold-free possession cues**: `hold` (which team is nearest to the seen ball, with a
+  0.5 m hysteresis; for how long it has been and will be; how long the previous and the next
+  holder kept it) and `d_turn` (nearest team weighted by the ball's velocity change).
+- **Speeds** clipped from below at 1 m/s and in units of the half's own speed scale; the raw
+  m/s columns are dropped from the model (`drop_features: @raw_kinematics`).
+- **Alive/dead head kept simple** (`head_drop`): no touch or kick timing, no control clocks, no
+  hold, no turn, no regime descriptors. Those earn their gain on team identity.
 
 Every folder under `models/` holds `regress.npz`: a 750-frame fixed sequence and the artefact's
 predictions on it, written with the code of the commit that trained it.
