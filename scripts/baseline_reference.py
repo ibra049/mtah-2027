@@ -3,6 +3,7 @@ non-holdout cache_deg half. Smoothing is per half (external halves are separate 
 
 ~/mtah-external/labels/baseline_smooth<w>/<profile>_<seed>/<MATCH>_<P>.npy  int8 {0=H,1=A,2=D}
 """
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,7 @@ CODE = {"H": 0, "A": 1, "D": 2}
 
 for profile in ("nominal", "harsh"):
     for seed in (0, 1):
-        for mid in OOF5:
+        for mid in (sys.argv[1:] or OOF5):   # e.g. METRICA1 METRICA2 METRICA3
             for p in (1, 2):
                 seq = Sequence.load(EXT / "cache_deg" / profile / str(seed) / f"{mid}_{p}.npz")
                 codes = baseline.nearest_codes(seq)
