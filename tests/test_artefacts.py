@@ -12,7 +12,9 @@ import pytest
 from mtah import model
 
 MODELS = Path(__file__).resolve().parents[1] / "models"
-ARTEFACTS = sorted(p.parent for p in MODELS.glob("*/meta.json"))
+# Frame models only (they carry dead.txt). Stacker artefacts (models/stack_*) get their own
+# bit-exact case from the decoder lane (tests/test_stack_artefacts.py).
+ARTEFACTS = sorted(p.parent for p in MODELS.glob("*/meta.json") if (p.parent / "dead.txt").exists())
 
 
 def test_there_are_artefacts_and_each_has_a_regression_case():
