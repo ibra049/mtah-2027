@@ -32,6 +32,12 @@ def f4(x):
     return "nan" if x is None or not np.isfinite(x) else f"{float(x):.4f}"
 
 
+def length_shares(durations_s, limits=(1, 2, 4)) -> dict:
+    """Share of possessions shorter than each limit (seconds)."""
+    d = np.asarray(durations_s, dtype=float)
+    return {f"share_lt{l}s": f4((d < l).mean()) if len(d) else "nan" for l in limits}
+
+
 def tag_agreement(codes, tags, phase_cfg):
     """{category: (n_alive_frames, share agreeing)} plus per-code rows. codes: 0 H, 1 A, 2 D, 3 X.
     Frames counted once per tag (overlapping tags each count)."""
@@ -86,11 +92,12 @@ def main(argv=None):
         say(half=half, n_possessions=len(spells),
             mean_possession_s=f"{np.mean(dur):.2f}" if dur else "nan",
             median_possession_s=f"{np.median(dur):.2f}" if dur else "nan",
-            n_short_lt2s=int(sum(d < 2 for d in dur)))
+            **length_shares(dur))
     spells = pm.possession_spells(filled, runs)
+    dur = [(e - s) / FPS for s, e, _ in spells]
     say(n_possessions_total=len(spells),
-        mean_possession_s_total=f"{np.mean([(e - s) / FPS for s, e, _ in spells]):.2f}"
-        if spells else "nan")
+        mean_possession_s_total=f"{np.mean(dur):.2f}" if dur else "nan",
+        **{k + "_total": v for k, v in length_shares(dur).items()})
 
     seqs, info = io_target.load(args.data_dir, cfg, dtype=np.float32, return_meta=True)
     tags = info["tags"]
