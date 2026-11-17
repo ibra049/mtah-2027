@@ -4,7 +4,7 @@ More Than A Hack 2027, Initial Challenge. Team **Montreal**.
 Code: https://github.com/ibra049/mtah-2027. The file is regenerated with one command (see Reproduction).
 
 > **Status of this document.** The only **TODO** left is the holdout score, which is not yet
-> measured. Shipped candidate: **v1q** (Sections 7–9). Nothing below is estimated or invented. The appendix describes the fallback
+> measured. Shipped candidate: **v4p** (Sections 7–9). Nothing below is estimated or invented. The appendix describes the fallback
 > file (the organisers' reference baseline, reproduced byte for byte), which keeps the document
 > accurate whichever file is uploaded.
 
@@ -28,7 +28,8 @@ ends matter more than per-frame accuracy. Three facts shaped the design:
 
 Pipeline per half:
 1. parse the tracking;
-2. compute team-symmetric, gap-aware features;
+2. canonicalise the tracking (short ball gaps interpolated, ball and player tracks low-pass
+   filtered) and compute team-symmetric, gap-aware features;
 3. LightGBM gives P(H, A, D) per frame;
 4. a temporal stacker re-reads those probabilities over ±2 s and sharpens them;
 5. an integer-cost segment Viterbi decoder produces the labels, with frames before the tagged
@@ -140,11 +141,13 @@ The low-jitter and smoothed ranges were widened after label-free audits of the p
 The new ranges are randomised per half and deliberately wide. Nothing was fitted or matched to
 the provided data.
 
-Training profiles:
-- **lgb_v1** (the shipped frame model): nominal and harsh draws, seeds 0 and 1. Its stacker uses
-  the out-of-fold probabilities of the same draws.
-- **Later frame models:** also stoppage and the low-jitter profiles, with per-half descriptors of
-  the noise regime as inputs (Section 7).
+Training profiles (from the artefacts' own metadata):
+- **lgb_v4** (the shipped frame model) was trained on:
+  - nominal, stoppage, nominal_lj and stoppage_lj, seeds 0 and 1;
+  - harsh, seed 0.
+- **Its stacker** (`stack_lgb_v4p`) was fitted on lgb_v4's out-of-fold probabilities for every
+  profile folder, including the smoothed and gap-stress draws.
+- **lgb_v1** (the earlier uploads v1 and v1q): nominal and harsh, seeds 0 and 1.
 
 ## 6. Possession rules implemented
 
@@ -197,18 +200,30 @@ hint.
   The final choice minimises the worst-case regret over the three label views.
 - **Determinism.** Integer costs and a fixed tie order make the output machine-independent.
 
+**Canonical inputs (feature version 4, shipped).** Before any feature is computed, both domains
+pass through the same canonicalisation (`mtah.features.canonicalize`):
+- objects more than 3 m outside the pitch are removed;
+- ball gaps under 1.5 s are interpolated;
+- the ball and every player tracklet are low-pass filtered within their observed stretches;
+- kinematics use 0.3 s baselines.
+
+Touches are detected from velocity changes over ±8 frames, against per-half quantile thresholds.
+This makes the provided tracking and every external profile look alike to the model (Section 9),
+whereas the earlier features read noise details that did not transfer.
+
 **Temporal stacker** (`mtah.stack`, `mtah.model_stacked`; `docs/stacker.md`). A second LightGBM
 model re-reads the frame model's own probabilities over about ±2 s. It sees the shape of the
 curves around a frame, which the frame model never sees, and re-sharpens short possessions.
-- **Inputs:** the shipped variant uses the probabilities only, pH − pA and pH + pA at fixed
-  offsets and window means (54 columns). It reads no onset channel and no ball cues.
+- **Inputs:** the shipped variant (v4p) reads pH − pA, pH + pA and the frame model's
+  team-change onset channel, at fixed offsets and as window means (79 columns). It reads no ball
+  cues. The earlier v1q variant read the probabilities only (54 columns).
 - **Fitting:** on the frame model's leave-one-match-out out-of-fold probabilities, so it learns
   from probabilities of the quality seen on an unseen match.
 - **Symmetry:** team-symmetric by construction, like the frame model.
 
-Shipped configuration (`configs/final.json` = candidate **v1q**):
-- **Frame model:** `models/lgb_v1`.
-- **Stacker:** `models/stack_lgb_v1q`, probabilities only.
+Shipped configuration (`configs/final.json` = candidate **v4p**):
+- **Frame model:** `models/lgb_v4` (feature version 4, 391 features).
+- **Stacker:** `models/stack_lgb_v4p`, probabilities plus onset.
 - **Decoder:** segment Viterbi with switch cost 3000, `min_poss` 19 frames, `min_dead` 50 frames and
   cost cap 4605.
 - **Turned off:** onset gain, snapping, pruning, boundary offsets and tag priors.
@@ -237,37 +252,48 @@ The external protocol ranks the three baseline windows as the target does, and s
 selection metric lands within 0.002 of its published target score. This is why we trust it for
 selection.
 
-| candidate | external score (DFL, out-of-fold) | label views / profiles | harsh | paired gain | matches won | Metrica (veto set) | target decision | holdout |
-|---|---|---|---|---|---|---|---|---|
-| v1 = lgb_v1 + decoder | 0.6469 (DFL nominal) | τ = 0 / 0.5 / 1 s: 0.617 / 0.639 / 0.685 | 0.6161 | +0.405 vs smooth50 | 5 / 5 | 0.6575 | previous upload | TODO |
-| **v1q = lgb_v1 + stacker (probabilities only) + decoder** | **0.6570** (DFL nominal) | | 0.6247 | +0.0101 vs v1 | 5 / 5 | 0.6835 (+0.0260, 3 / 3); nominal_lj 0.6914, stoppage_lj 0.7384 | **shipped** | TODO |
-| v1p = v1 + stacker with onset input | | | | | | | rejected | |
-| v2 = lgb_v2 + decoder | 0.6786 (select: nominal + stoppage) | nominal 0.6730, stoppage 0.6842 | 0.6270 | +0.0317 vs v1 | 5 / 5 | 0.7110 | rejected | |
-| v3 = lgb_v3 + decoder | 0.6808 (select: nominal + stoppage) | | | | | | rejected | |
-| v4 = lgb_v4 (canonicalised inputs) + decoder | 0.6806 (select: nominal + stoppage) | | | | | | under evaluation | |
+All rows use the frozen decoder. Scores are DFL out-of-fold. **select** is the selection
+metric (mean of nominal and stoppage) and exists only for models with stoppage predictions.
+Metrica is the veto set.
 
-- **Which scores compare.** v1 and v1q have out-of-fold predictions on the nominal profile only,
-  so their scores are DFL nominal. v2–v4 also have stoppage predictions and report the selection
-  metric (mean of nominal and stoppage). Only scores of the same kind are compared.
-- **The shipped file is not the highest-scoring external model.** The label-free transfer checks
-  of Section 9 decide which candidates may run on the provided tracking at all.
-- **v2 and v3 (rejected).** Both score higher externally, but on the provided tracking they
-  over-call dead ball:
+| candidate | DFL nominal | DFL harsh | select | paired gain | Metrica | target decision | holdout |
+|---|---|---|---|---|---|---|---|
+| v1 = lgb_v1 + decoder | 0.6469 | 0.6161 | – | +0.405 vs smooth50 (5 / 5) | 0.6575 | earlier upload | TODO |
+| v1q = lgb_v1 + stacker (probabilities only) | 0.6570 | 0.6247 | – | +0.0101 vs v1 (5 / 5) | 0.6835 (+0.0260 vs v1, 3 / 3) | earlier upload | TODO |
+| v1p = lgb_v1 + stacker with onset | | | | | | rejected | |
+| v2 = lgb_v2 + decoder | 0.6730 | 0.6270 | 0.6786 | +0.0317 vs v1 (5 / 5) | 0.7110 | rejected | |
+| v3 = lgb_v3 + decoder | | | 0.6808 | | | rejected | |
+| v4 = lgb_v4 (canonical inputs) + decoder | 0.6670 | 0.6307 | 0.6781 | | +0.020…+0.030 vs v1q | not shipped alone | |
+| v4q = lgb_v4 + stacker (probabilities only) | 0.6757 | 0.6399 | 0.6856 | | +0.035…+0.048 vs v1q | fallback sibling | |
+| **v4p = lgb_v4 + stacker with onset** | **0.6800** | **0.6467** | **0.6904** | +0.0123 select vs v4 (4 / 5); +0.0229 nominal, +0.0221 harsh vs v1q | +0.046…+0.058 vs v1q, 3 / 3 on all seven draws incl. nominal_sm and stoppage_sm | **shipped** | TODO |
+| v4s = lgb_v4s + decoder | | | 0.6723 | no gain over v4 | | not adopted | |
+
+- **Higher external scores were not enough on their own.** v2 and v3 scored higher externally
+  than the v1 family. The label-free transfer checks of Section 9 rejected them. The shipped v4p
+  passes both the external adoption rule and every transfer check.
+- **v2 and v3 (rejected).** On the provided tracking they over-call dead ball:
   - dead share 0.47 and 0.50, against 0.42 for v1;
   - more and shorter dead stretches than any external match.
 
   The cause is plain in the audits. The provided ball track is low-pass filtered (ball velocity
   lag-1 autocorrelation 0.998, against at most 0.78 in any external source). On it, the touch
   detector these models depend on fires about once a minute, against 20–35 times externally, so
-  their touch-timing features sit outside the range they were trained on.
-- **v1p (rejected).** Its stacker depends on the frame model's team-change onset output. On the
-  provided tracking that output is nearly silent: its 95th percentile is 2.5–4.5 reference IQRs
-  below every external profile. Externally, forcing that input to zero drops v1p below plain v1.
-- **v1q (shipped).** The same stacker without the onset input. Every input it reads is within
-  ±0.8 IQR of the external references on the provided tracking. Its possession count (313)
-  matches v1's (312), and it removes some of v1's short false stoppages.
-- **v4 (under evaluation).** Its inputs are canonicalised in both domains before any feature is
-  computed: short ball gaps interpolated, tracks low-pass filtered, kinematics over 0.3 s.
+  their touch-timing features sit outside the range they were trained on. Externally, the
+  smoothed profiles reproduce the same failure (Section 9).
+- **v1p (rejected).** Its stacker depends on lgb_v1's team-change onset output. On the provided
+  tracking that output is nearly silent: its 95th percentile is 2.5–4.5 reference IQRs below every
+  external profile. Externally, forcing that input to zero drops v1p below plain v1.
+- **v1q (earlier upload).** The same stacker without the onset input. Every input it reads is
+  within ±0.8 IQR of the external references on the provided tracking.
+- **v4p (shipped).** The canonical inputs make the frame model's onset channel transfer. On the
+  provided tracking it runs at 0.87–0.92 of its external level, where v1's was nearly silent. On
+  the provided tracking v4p also has:
+  - 312 possessions;
+  - a dead share of 0.437;
+  - short dead stretches inside the external envelope in both halves, the first candidate to
+    manage that.
+- **v4q (fallback sibling).** v4 with the probabilities-only stacker. It is the drop-in
+  replacement if the onset channel is ever in doubt.
 
 Public 5-minute window: reserved as a breakage check only (alignment and label meaning,
 pass/fail). **Not run** on the shipped file. The fallback's frame alignment was verified
@@ -294,8 +320,21 @@ data-access wrapper and print aggregates only.
   exception: it has no ball gaps of 1.5–4 s). This allowed v4 to be run on the provided tracking
   at all.
 - **Stack-input shift** (`mtah.stack_shift`). Standardised shift of the stacker's inputs against
-  their external out-of-fold distribution. It rejected v1p (onset input silent) and kept v1q (all
-  inputs within ±0.8 IQR).
+  their external out-of-fold distribution.
+  - It rejected v1p (onset input silent) and kept v1q (all inputs within ±0.8 IQR).
+  - For v4p it measured the onset channel on the provided tracking at 0.89 (95th percentile),
+    0.92 (99th percentile) and 0.87 (peaks per minute) of the median of 14 external references
+    (7 profiles, DFL and Metrica). The 99th percentile and the peak rate lie inside the external
+    range.
+- **Onset dose-response** (external). On Metrica, v4p with its onset input scaled ×0.5 is still
+  0.013–0.026 above v4. At ×0.25 it breaks even, and at ×0 it falls 0.11 below. The measured
+  level (≈0.9) is therefore far from the break-even point.
+- **Smoothed-profile check** (external). The smoothed profiles reproduce the v2/v3 failure
+  without touching the provided data:
+  - v2's and v3's lead over v1 shrinks from +0.055 / +0.060 to +0.006 / +0.013;
+  - their spurious dead runs rise 1.4–2×.
+
+  These profiles serve as a veto set for any model that leans on touch timing.
 - **Candidate comparison and external envelope** (`mtah.check_candidate`,
   `mtah.compare_candidates`):
   - per-half possession and dead-stretch statistics, compared with the same statistics of the
@@ -304,7 +343,8 @@ data-access wrapper and print aggregates only.
     and position relative to Smart Tagging phases.
 
   These rejected v3, which adds dead frames with the ball in view, and preferred v1q's dead-ball
-  edits over v1's.
+  edits over v1's. They also showed that v4p is the first candidate whose short dead stretches
+  stay inside the external envelope in both halves.
 
 ## 10. Limitations
 
@@ -313,6 +353,9 @@ data-access wrapper and print aggregates only.
   Bundesliga is not LaLiga. The `stoppage` and
   `nominal` profiles bracket the most consequential unknown: how the target tracker loses the
   ball in stoppages.
+- **Onset dependence.** v4p depends on its frame model's team-change onset channel. On the
+  provided tracking that channel runs at about 0.9 of its external level. Externally, v4p stays
+  ahead of plain v4 down to about half that level. v4q (no onset input) is the drop-in fallback.
 - **Label granularity.** The ground truth's exact notion of "controlled possession" is unknown.
   We hedge across τ = 0–1 s rather than commit to one view, which costs a little on whichever
   view is right.
