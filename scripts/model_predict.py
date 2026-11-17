@@ -35,7 +35,10 @@ def main(argv=None):
         (dst / "aux").mkdir(parents=True, exist_ok=True)
         for match in args.matches:
             for period in (1, 2):
-                seq = Sequence.load(EXT / "cache_deg" / profile / seed / f"{match}_{period}.npz")
+                src = EXT / "cache_deg" / profile / seed / f"{match}_{period}.npz"
+                if not src.exists():                     # e.g. Metrica has no stoppage profile
+                    continue
+                seq = Sequence.load(src)
                 p, aux = model.predict_both(art, seq)
                 assert np.isfinite(p).all()
                 np.savez_compressed(dst / f"{match}_{period}.npz", proba=p,
