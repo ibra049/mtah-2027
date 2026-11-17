@@ -32,7 +32,7 @@ def load_cfg(path=DEFAULT_CFG) -> dict:
     return cfg
 
 
-PROFILES = ("nominal", "harsh", "stoppage", "gapstress", "nominal_lj", "stoppage_lj")
+PROFILES = ("nominal", "harsh", "stoppage", "gapstress", "nominal_lj", "stoppage_lj", "nominal_sm", "stoppage_sm")
 
 
 def load_profile(name, path=DEFAULT_CFG) -> dict:
@@ -118,11 +118,12 @@ def ball_dropout_split(seq, rng, cfg):
     def run_d(b):
         return _gilbert(u3, u4, np.where(dead, min(np.exp(b), 1.0), 0.0), pd)
 
+    # each chain is confined to its own frames: a long stoppage gap must not run on into play
     miss = np.zeros(T, bool)
     if alive.any():
-        miss |= run_a(_bisect(lambda b: run_a(b)[alive].mean(), cfg["alive_missing_frac"], -12.0, 2.0, n=18))
+        miss |= run_a(_bisect(lambda b: run_a(b)[alive].mean(), cfg["alive_missing_frac"], -12.0, 2.0, n=18)) & alive
     if dead.any():
-        miss |= run_d(_bisect(lambda b: run_d(b)[dead].mean(), cfg["dead_missing_frac"], -12.0, 2.0, n=18))
+        miss |= run_d(_bisect(lambda b: run_d(b)[dead].mean(), cfg["dead_missing_frac"], -12.0, 2.0, n=18)) & dead
     return miss
 
 
@@ -227,9 +228,14 @@ def degrade_team(pos, rng, cfg):
     K = cfg["slots_per_team"]
     pos = pos + _ar1(pos.shape, rng, cfg["player_jitter_m"], cfg["jitter_rho"])
     vis = ~np.isnan(pos[..., 0])
+    gap_s = cfg["player_gap_mean_s"]
+    if cfg.get("player_on_mean_s"):
+        # fragmentation drawn as the mean visible stretch; the gap length follows from the FACT
+        # missing share so the mean number of visible objects is unchanged
+        f = cfg["player_missing_frac"]
+        gap_s = cfg["player_on_mean_s"] * f / (1 - f)
     for p in range(P):
-        vis[:, p] &= ~_player_dropout(T, rng, cfg["player_missing_frac"],
-                                      cfg["player_gap_mean_s"] * FPS)
+        vis[:, p] &= ~_player_dropout(T, rng, cfg["player_missing_frac"], gap_s * FPS)
     # identity swaps: two visible same-team players come within swap_radius -> with prob p_swap
     # their continuations exchange slots (CHALLENGE/DATA: tracks "swap identity").
     cut = {p: set() for p in range(P)}
@@ -337,6 +343,57 @@ def wrong_team(home, away, rng, cfg):
     return home, away
 
 
+# ---------------------------------------------------------------- tracker output filter
+def _fill_short_gaps(x, max_len):
+    """Linear interpolation of NaN gaps of at most max_len frames between two observations
+    (x: [T, d]); longer gaps and the ends stay NaN."""
+    x = x.copy()
+    obs = ~np.isnan(x[:, 0])
+    m = np.r_[False, ~obs, False].astype(np.int8)
+    for a, b in zip(np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1)):
+        if a == 0 or b >= len(x) or b - a > max_len:
+            continue
+        w = (np.arange(a, b) - (a - 1)) / (b - (a - 1))
+        x[a:b] = x[a - 1] + w[:, None] * (x[b] - x[a - 1])
+    return x
+
+
+def _smooth_runs(x, sigma):
+    """Gaussian low-pass of x [T, d] inside each observed run (no smoothing across gaps)."""
+    from scipy.ndimage import gaussian_filter1d
+    if sigma <= 0:
+        return x
+    x = x.copy()
+    obs = ~np.isnan(x[:, 0])
+    m = np.r_[False, obs, False].astype(np.int8)
+    for a, b in zip(np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1)):
+        if b - a >= 3:
+            x[a:b] = gaussian_filter1d(x[a:b].astype(np.float64), sigma, axis=0, mode="nearest")
+    return x
+
+
+def tracker_filter(out, cfg):
+    """Tracker output filter (assumption; providers differ: velocity lag-1 autocorrelation of the
+    clean ball is ~.78 on Metrica and ~.31 on DFL). Ball: interpolate gaps <= ball_fill_gap_s,
+    then Gaussian low-pass (ball_smooth_sigma_f frames) inside each observed stretch. Players:
+    Gaussian low-pass (player_smooth_sigma_f) inside each tracklet. Off when the keys are absent."""
+    sb = cfg.get("ball_smooth_sigma_f")
+    if sb is None:
+        return out
+    b = out.ball[:, :2].astype(np.float64)
+    b = _fill_short_gaps(b, int(round(cfg.get("ball_fill_gap_s", 0.0) * FPS)))
+    out.ball = out.ball.copy()
+    out.ball[:, :2] = _smooth_runs(b, sb).astype(np.float32)
+    sp = cfg.get("player_smooth_sigma_f", 0.0)
+    if sp > 0:
+        for name in ("home", "away"):
+            arr = getattr(out, name).copy()
+            for k in range(arr.shape[1]):
+                arr[:, k] = _smooth_runs(arr[:, k].astype(np.float64), sp).astype(np.float32)
+            setattr(out, name, arr)
+    return out
+
+
 # ---------------------------------------------------------------- entry point
 def apply(seq: Sequence, rng: np.random.Generator, cfg: dict) -> Sequence:
     out = seq.copy()
@@ -355,6 +412,7 @@ def apply(seq: Sequence, rng: np.random.Generator, cfg: dict) -> Sequence:
     out.away = degrade_team(seq.away, rng, cfg)
     out.ball = false_ball(ball, out, rng, cfg)
     out.home, out.away = wrong_team(out.home, out.away, rng, cfg)
+    out = tracker_filter(out, cfg)
     out.extra = {k: v for k, v in seq.extra.items() if k in cfg["keep_extra"]}
     return out
 
@@ -403,13 +461,32 @@ def still_share(seq, window_s=5.0, max_extent_m=0.2) -> float:
     return float((covered & obs).sum() / obs.sum())
 
 
+def player_motion(seq) -> dict:
+    """Player tracks: lag-1 autocorrelation of per-frame velocity (x, y pooled over slots), median
+    per-slot speed (m/s, consecutive observed frames) and median tracklet length (s; maximal
+    observed run in a slot)."""
+    P = np.concatenate([seq.home, seq.away], 1).astype(np.float64)       # [T,K,2]
+    v = (P[1:] - P[:-1]) * FPS                                            # NaN where a frame is missing
+    sp = np.sqrt((v ** 2).sum(-1))
+    a, b = v[:-1], v[1:]
+    ok = np.isfinite(a[..., 0]) & np.isfinite(b[..., 0])
+    ac = [float(np.corrcoef(a[..., c][ok], b[..., c][ok])[0, 1]) for c in (0, 1)] if ok.sum() > 50 else [np.nan]
+    obs = ~np.isnan(P[..., 0])
+    lens = []
+    for k in range(obs.shape[1]):
+        m = np.r_[False, obs[:, k], False].astype(np.int8)
+        lens += list((np.flatnonzero(np.diff(m) == -1) - np.flatnonzero(np.diff(m) == 1)) / FPS)
+    return {"player_ac1": float(np.nanmean(ac)), "player_speed_med": float(np.nanmedian(sp)),
+            "tracklet_med_s": float(np.median(lens)) if lens else float("nan")}
+
+
 def summary(seq) -> dict:
     n_vis = np.sum(~np.isnan(seq.home[..., 0]), 1) + np.sum(~np.isnan(seq.away[..., 0]), 1)
     ball_obs = ~np.isnan(seq.ball[:, 0])
     gaps = [e - s for s, e in _runs(~ball_obs)]
     return {"ball_obs": float(ball_obs.mean()), "mean_objects": float(n_vis.mean()),
             "max_objects": int(n_vis.max()), "frac_gt22": float((n_vis > 22).mean()),
-            "still_share": still_share(seq),
+            "still_share": still_share(seq), **player_motion(seq),
             "ball_gap_mean_s": float(np.mean(gaps)) / FPS if gaps else 0.0,
             "slots_used": int(np.sum(np.any(~np.isnan(seq.home[..., 0]), 0))
                               + np.sum(np.any(~np.isnan(seq.away[..., 0]), 0)))}

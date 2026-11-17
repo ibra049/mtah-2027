@@ -28,7 +28,7 @@ def _dropout_note(metrica, profile):
     if profile == "gapstress":
         return ("STRESS TEST: provider dead-ball gaps kept; alive dropout drawn 25-40% with 3-5 s gaps; "
                 "overall missing ABOVE the documented 40.7% by design")
-    if profile in ("stoppage", "stoppage_lj"):
+    if profile in ("stoppage", "stoppage_lj", "stoppage_sm"):
         return ("clean Metrica ball gaps kept; dropout added so OVERALL missing = ball_missing_frac "
                 "(stoppage regime: alive missing low, dead missing ~98%)")
     return ("clean Metrica ball gaps kept (missing in stoppages); dropout added on top so ball missing "
@@ -53,7 +53,7 @@ def build(profile, seed, match_id, period, force=False):
         cfg["ball_target_alive"] = True
         if profile == "gapstress":
             pass   # alive-targeted: alive_missing_frac drawn 25-40%, provider dead gaps kept
-        elif profile in ("stoppage", "stoppage_lj"):
+        elif profile in ("stoppage", "stoppage_lj", "stoppage_sm"):
             # the provider's clean data IS the stoppage regime: keep its dead-ball gaps and add
             # dropout so the OVERALL missing share is the FACT 40.7% (alive missing ~10-20%)
             cfg["ball_target_overall"] = True
@@ -63,6 +63,10 @@ def build(profile, seed, match_id, period, force=False):
     alive = (seq.y >= 0) & ~dead
     summ = degrade.summary(deg)
     summ["still_share_clean"] = degrade.still_share(seq)
+    if profile.endswith("_sm"):
+        from mtah import ball_audit
+        aud = ball_audit.audit(deg)
+        summ["ball_audit"] = {g: {k: float(v) for k, v in d.items()} for g, d in aud.items()}
     summ["ball_miss_dead"] = float(miss[dead].mean()) if dead.any() else None
     summ["ball_miss_alive"] = float(miss[alive].mean()) if alive.any() else None
     summ["dead_alive_miss_ratio"] = (summ["ball_miss_dead"] / summ["ball_miss_alive"]
@@ -104,5 +108,9 @@ if __name__ == "__main__":
                     print(f"{profile}/{seed}/{mid}_{period} ball_obs={s['ball_obs']:.3f} "
                           f"objs={s['mean_objects']:.1f} max={s['max_objects']} gap={s['ball_gap_mean_s']:.2f}s "
                           f"dead/alive={s['dead_alive_miss_ratio'] or float('nan'):.2f} "
-                          f"slots={s['slots_used']} still={s['still_share']:.4f}/clean {s['still_share_clean']:.4f} t={m['seconds']}s", flush=True)
+                          f"slots={s['slots_used']} still={s['still_share']:.4f}/clean {s['still_share_clean']:.4f} "
+                          + (f"ac1={s['ball_audit']['g4']['ac1']:.3f} dv3_99={s['ball_audit']['g3']['dv3_99']:.1f} "
+                             f"sb={m['drawn']['ball_smooth_sigma_f']:.1f} trk={s['tracklet_med_s']:.0f}s " if 'ball_audit' in s else "")
+                          + f"pac1={s['player_ac1']:.2f} psp={s['player_speed_med']:.2f} "
+                          + f"t={m['seconds']}s", flush=True)
             print(f"DONE {profile}/{seed}", flush=True)
