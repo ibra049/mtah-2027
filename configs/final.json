@@ -1,0 +1,5 @@
+{
+  "_doc": "THE submission config (README: single regeneration command). Currently the fallback (official nearest-player + smooth50 baseline). The captain replaces it with the locked candidate and updates the EXPECTED_SHA256 line in README.md in the same commit.",
+  "method": "baseline",
+  "window": 50
+}

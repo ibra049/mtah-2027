@@ -3,7 +3,20 @@ data/
 *.mp4
 *BAR-ATH*
 mtah-data/
+mtah-external/
+# any frame-level output (submissions, predictions, logs) stays out of the repo
+*.csv
+out/
+logs/
+preds/
+*.log
+cache/
+cache_deg/
+cache_metrica/
+cache_tags/
+labels/
 # local
+.venv
 .venv/
 vendor/
 __pycache__/
