@@ -4,7 +4,7 @@ For each of the 5 non-holdout matches: train on the other 4 (every training draw
 caches), predict the held-out match for every export draw, write
 
     ~/mtah-external/preds/<name>/oof/<profile>_<seed>/<match>_<period>.npz       proba float32 [T,3] (H,A,D), frame int64 [T]
-    ~/mtah-external/preds/<name>/oof/<profile>_<seed>/aux/<match>_<period>.npz   team_change float32 [T], frame (optional hint)
+    ~/mtah-external/preds/<name>/oof/<profile>_<seed>/aux/<match>_<period>.npz   turn_onset float32 [T], frame (optional hint)
 
 Then one model on all 5 matches -> models/<name>/ and its predictions for the holdout matches in
 ~/mtah-external/preds/<name>/holdout/<profile>_<seed>/ (written, never scored here).
@@ -34,7 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXT = Path.home() / "mtah-external"
 CV = SPLITS["train"] + SPLITS["dev"]
 HOLDOUT = SPLITS["holdout"]
-ALL_DRAWS = "nominal:0,nominal:1,harsh:0,harsh:1"
+METRICA = ["METRICA1", "METRICA2", "METRICA3"]   # second development set: predicted, never trained on
+ALL_DRAWS = "nominal:0,nominal:1,stoppage:0,stoppage:1,harsh:0,harsh:1"
 
 
 def parse_draws(s):
@@ -43,7 +44,8 @@ def parse_draws(s):
 
 def load_seq(profile, seed, match, period, tau_frames):
     seq = Sequence.load(EXT / "cache_deg" / profile / str(seed) / f"{match}_{period}.npz")
-    seq.y = min_control(seq.y, tau_frames).astype(np.int8)
+    if not match.startswith("METRICA"):          # Metrica labels are used as they come
+        seq.y = min_control(seq.y, tau_frames).astype(np.int8)
     return seq
 
 
@@ -72,6 +74,25 @@ def fmt(r):
                       for k, v in r.items())
 
 
+def predict_metrica(art, predict_match, export_draws, log):
+    """All-5 model on the degraded Metrica sample games (never trained on). Frame metrics against
+    the provider-semantics labels are printed for information; the team table scores them."""
+    out = {}
+    have = [m for m in METRICA if all(
+        (EXT / "cache_deg" / p / str(k) / f"{m}_{per}.npz").exists()
+        for p, k in export_draws for per in (1, 2))]
+    res = {m: predict_match(art, m, "metrica") for m in have}
+    for profile, seed in export_draws:
+        parts = [res[m][(profile, seed, per)] for m in have for per in (1, 2)]
+        if parts:
+            r = frame_metrics(np.concatenate([a[0] for a in parts]),
+                              np.concatenate([a[1] for a in parts]),
+                              np.concatenate([a[2] for a in parts]))
+            out[f"{profile}_{seed}"] = r
+            log(f"METRICA {profile}_{seed} ({len(have)} games): {fmt(r)}")
+    return out
+
+
 def git_commit():
     try:
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
@@ -88,8 +109,18 @@ def main(argv=None):
     ap.add_argument("--export-draws", default=ALL_DRAWS)
     ap.add_argument("--no-final", action="store_true", help="skip the all-5 model and holdout files")
     ap.add_argument("--no-write", action="store_true", help="metrics only, no prediction files")
+    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=JSON",
+                    help="config overrides for experiments, e.g. rounds.change=0 stride=10 "
+                         "'drop_features=[\"ctrl\"]'")
     args = ap.parse_args(argv)
     cfg = model.load_cfg(args.config)
+    for kv in args.set:
+        key, val = kv.split("=", 1)
+        node = cfg
+        *parents, leaf = key.split(".")
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = json.loads(val)
     tau_s = json.loads((ROOT / "configs" / "labels.json").read_text())["min_control_tau_s"]
     tau = int(round(tau_s * FPS))
     train_draws, export_draws = parse_draws(args.train_draws), parse_draws(args.export_draws)
@@ -127,17 +158,16 @@ def main(argv=None):
                         np.savez_compressed(dst / "aux" / f"{match}_{period}.npz",
                                             frame=seq.frame.astype(np.int64), **aux)
                 res[(profile, seed, period)] = (p, seq.y.copy(), ~np.isnan(seq.ball[:, 0]),
-                                                aux.get("team_change"))
+                                                aux.get("turn_onset"))
         return res
 
     # 2. folds
     oof, curves = {}, {}
     for match in CV:
-        X = np.concatenate([rows[m][0] for m in CV if m != match])
-        y = np.concatenate([rows[m][1] for m in CV if m != match])
         curve = {}
-        art = model.fit_arrays(X, y, names, cfg, valid=rows[match], log=curve)
-        del X, y
+        art = model.fit_arrays([rows[m][0] for m in CV if m != match],
+                               [rows[m][1] for m in CV if m != match],
+                               names, cfg, valid=rows[match], log=curve)
         curves[match] = curve
         oof[match] = predict_match(art, match, "oof")
         best = {h: (int(np.argmin(c)) + 1, float(np.min(c)), float(c[-1])) for h, c in curve.items()}
@@ -181,10 +211,7 @@ def main(argv=None):
     mdir = ROOT / "models" / args.name
     mdir.mkdir(parents=True, exist_ok=True)
     if not args.no_final:
-        X = np.concatenate([rows[m][0] for m in CV])
-        y = np.concatenate([rows[m][1] for m in CV])
-        art = model.fit_arrays(X, y, names, cfg)
-        del X, y
+        art = model.fit_arrays([rows[m][0] for m in CV], [rows[m][1] for m in CV], names, cfg)
         art["info"] = {"trained_on": CV, "train_draws": args.train_draws, "tau_s": tau_s,
                        "commit": report["commit"]}
         model.save(art, mdir)
@@ -192,6 +219,7 @@ def main(argv=None):
             predict_match(art, match, "holdout")
         log(f"final model saved to {mdir} ({sum(f.stat().st_size for f in mdir.glob('*.txt')) / 1e6:.1f} MB); "
             f"holdout predictions written, not scored")
+        report["metrica"] = predict_metrica(art, predict_match, export_draws, log)
     (mdir / "oof_report.json").write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
     log("done")
     return 0

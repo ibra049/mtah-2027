@@ -81,10 +81,28 @@ def test_save_load_roundtrip(art, test_seq, tmp_path):
     assert back["names"] == art["names"]
 
 
-def test_feature_order_is_checked(art, test_seq):
+def test_columns_are_matched_by_name(art, test_seq):
     X, names = features.compute(test_seq)
+    p = model.predict_proba_X(art, X, names)
+    np.testing.assert_array_equal(model.predict_proba_X(art, X[:, ::-1], names[::-1]), p)
     with pytest.raises(ValueError):
-        model.predict_proba_X(art, X, names[::-1])
+        model.predict_proba_X(art, X[:, 1:], names[1:])       # a trained feature is missing
+
+
+def test_drop_features(train, test_seq):
+    cfg = dict(CFG, rounds={"dead": 5, "team": 5}, drop_features=["ctrl", "^n_gap"])
+    small = model.fit(train[:1], cfg)
+    assert small["names"] and not any("ctrl" in n or n.startswith("n_gap") for n in small["names"])
+    assert len(small["names"]) < len(features.compute(test_seq)[1])
+    p = model.predict_proba(small, test_seq)
+    np.testing.assert_allclose(model.predict_proba(small, features.swap_seq(test_seq)), p[:, [A, H, D]], atol=1e-6)
+
+
+def test_load_artefact_convention(art, test_seq, tmp_path):
+    model.save(art, tmp_path / "m")
+    back = model.load_artefact(tmp_path / "m", {"anything": 1})
+    p = model.predict_proba(back, test_seq)
+    assert np.isfinite(p).all() and np.allclose(p.sum(1), 1.0, atol=1e-5)
 
 
 def test_change_labels():
@@ -97,14 +115,14 @@ def test_change_labels():
 
 def test_predict_aux(art, test_seq):
     aux = model.predict_aux(art, test_seq)
-    p = aux["team_change"]
+    p = aux["turn_onset"]
     assert p.dtype == np.float32 and p.shape == (len(test_seq),) and ((p >= 0) & (p <= 1)).all()
-    np.testing.assert_allclose(model.predict_aux(art, features.swap_seq(test_seq))["team_change"], p, atol=1e-6)
+    np.testing.assert_allclose(model.predict_aux(art, features.swap_seq(test_seq))["turn_onset"], p, atol=1e-6)
     c = model.change_labels(test_seq.y)
     assert p[c].mean() > 2 * p[~c].mean()                  # it does point at changes
     both = model.predict_both(art, test_seq)
     np.testing.assert_array_equal(both[0], model.predict_proba(art, test_seq))
-    np.testing.assert_array_equal(both[1]["team_change"], p)
+    np.testing.assert_array_equal(both[1]["turn_onset"], p)
 
 
 def test_no_change_head_means_no_aux(train, test_seq):
@@ -112,3 +130,25 @@ def test_no_change_head_means_no_aux(train, test_seq):
     small = model.fit(train[:1], cfg)
     assert model.predict_aux(small, test_seq) == {}
     assert model.predict_proba(small, test_seq).shape == (len(test_seq), 3)
+
+
+def test_fit_arrays_list_equals_concatenated(train):
+    cfg = dict(CFG, rounds={"dead": 8, "team": 8, "change": 8})
+    parts = [model.sample(s, cfg, draw=i) for i, s in enumerate(train[:3])]
+    names = parts[0][2]
+    a = model.fit_arrays([p[0] for p in parts], [p[1] for p in parts], names, cfg)
+    b = model.fit_arrays(np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts]), names, cfg)
+    for head in model.HEADS:
+        assert a[head].model_to_string() == b[head].model_to_string()
+
+
+def test_validation_curve_is_reported_not_used(train):
+    cfg = dict(CFG, rounds={"dead": 6, "team": 6, "change": 6})
+    X, Y, names = model.sample(train[0], cfg)
+    Xv, Yv, _ = model.sample(train[1], cfg)
+    log = {}
+    a = model.fit_arrays(X, Y, names, cfg, valid=(Xv, Yv), log=log)
+    b = model.fit_arrays(X, Y, names, cfg)
+    assert set(log) == set(model.HEADS) and all(len(v) == 6 for v in log.values())
+    for head in model.HEADS:
+        np.testing.assert_array_equal(a[head].predict(Xv), b[head].predict(Xv))

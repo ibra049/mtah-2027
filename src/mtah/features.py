@@ -43,7 +43,10 @@ BOX_DEPTH, BOX_HALF_WIDTH = 16.5, 20.16
 NEAR_RADII = (3.0, 8.0)
 WINDOWS = (12, 50, 150)             # past / future aggregates: 0.5 s, 2 s, 6 s
 VOTE_WINDOWS = (25, 50, 125, 250)   # centred "which team is nearest" vote, as the baseline
+CTRL_RADII = (1.5, 3.0)             # m; "exclusive control": one team within r of the seen ball, the other not
+KICK_RADIUS, KICK_DV = 3.0, 6.0     # m, m/s: velocity jump of the seen ball next to one team only
 EXTREME_WINDOW = 50
+REGIME_GAPS_S = (2, 4, 10)          # per-half share of ball-missing frames inside gaps at least this long
 DECIMALS = 4                        # features are rounded to 1e-4 (portability)
 
 
@@ -264,6 +267,21 @@ def _compute(seq):
     c["n_t_until"] = np.where(has_n, np.minimum((nxt - t) / FPS, T_CAP_S), np.nan)
     c["n_gap"] = np.where(obs, 0.0, np.where(has_l & has_n,
                                              np.minimum((nxt - last - 1) / FPS, T_CAP_S), np.nan))
+    # regime descriptors: constants of the half, from the input only. They tell the trees what
+    # kind of tracking this is (how much of the ball is lost, and whether it is lost in long
+    # stretches), so "a long gap means a stoppage" can be learned where it holds and ignored
+    # where it does not. On the target they are computed from the target's own tracking.
+    miss = ~obs
+    glen = np.where(obs, 0, nxt - last - 1)               # length of the gap a frame sits in
+    n_miss = max(int(miss.sum()), 1)
+    c["n_reg_miss"] = np.full(T, miss.mean() if T else np.nan)
+    for sec in REGIME_GAPS_S:
+        c[f"n_reg_gap{sec}"] = np.full(T, (glen >= sec * FPS).sum() / n_miss)
+    starts = miss & ~np.concatenate([[False], miss[:-1]])
+    c["n_reg_gapmed"] = np.full(T, float(np.median(glen[starts])) / FPS if starts.any() else 0.0)
+    vis = (~np.isnan(seq.home).any(2)).sum(1) + (~np.isnan(seq.away).any(2)).sum(1)
+    c["n_reg_players"] = np.full(T, vis.mean() if T else np.nan)
+
     btouch = W / 2 - np.abs(bi[:, 1])          # <0: beyond a touchline
     bgoal = L / 2 - np.abs(bi[:, 0])           # <0: beyond a goal line
     c["n_btouch"], c["n_bgoal"] = btouch, bgoal
@@ -307,6 +325,43 @@ def _compute(seq):
     closer = np.where(np.isnan(fa["d1"]) & ~np.isnan(fh["d1"]), 1.0, closer)
     closer = np.where(obs, closer, np.nan)
     c["d_closer"] = closer
+
+    # Exclusive events on the *seen* ball, and how long ago / how soon each team has one. They
+    # carry the possessor across ball gaps: the label follows the last team that had the ball,
+    # and an agreeing next one confirms it.
+    #   ctrl<r>  one team has a player within r metres of the ball, the other does not
+    #   kick     the same within KICK_RADIUS while the ball's velocity jumps (a pass, shot,
+    #            reception or deflection), measured on observed frames only
+    vraw = np.where((obs & np.roll(obs, BALL_LAG) & np.roll(obs, -BALL_LAG))[:, None], vb, np.nan)
+    kink = np.full(T, np.nan, np.float32)
+    if T > 2 * k:
+        kink[k:-k] = _norm(vraw[2 * k:] - vraw[:-2 * k])
+    c["n_kink"] = np.minimum(kink, 2 * BALL_SPEED_CAP)
+    events = [(f"ctrl{int(round(r * 10))}", obs & (fh["d1"] < r), obs & (fa["d1"] < r))
+              for r in CTRL_RADII]
+    hit = obs & (kink > KICK_DV)                   # NaN compares False
+    events.append(("kick", hit & (fh["d1"] < KICK_RADIUS), hit & (fa["d1"] < KICK_RADIUS)))
+    for tag, hin, ain in events:
+        sig = np.where(obs, hin.astype(np.float32) - ain.astype(np.float32), np.nan)
+        c[f"d_{tag}"] = sig
+        tl, tn = {}, {}
+        for side, ev in (("h", hin & ~ain), ("a", ain & ~hin)):
+            lastc = np.maximum.accumulate(np.where(ev, t, -1))
+            nextc = np.minimum.accumulate(np.where(ev, t, T)[::-1])[::-1]
+            tl[side] = np.where(lastc >= 0, np.minimum((t - lastc) / FPS, T_CAP_S), T_CAP_S)
+            tn[side] = np.where(nextc < T, np.minimum((nextc - t) / FPS, T_CAP_S), T_CAP_S)
+            c[f"{side}_{tag}_tlast"] = tl[side]
+            c[f"{side}_{tag}_tnext"] = tn[side]
+        c[f"d_{tag}_tlast"] = tl["h"] - tl["a"]        # <0: home had it more recently
+        c[f"d_{tag}_tnext"] = tn["h"] - tn["a"]        # <0: home has it sooner
+        c[f"d_{tag}_last"] = np.sign(tl["a"] - tl["h"])
+        c[f"d_{tag}_next"] = np.sign(tn["a"] - tn["h"])
+        c[f"n_{tag}_tlast"] = np.minimum(tl["h"], tl["a"])
+        c[f"n_{tag}_tnext"] = np.minimum(tn["h"], tn["a"])
+        x = np.asarray(sig, np.float64)
+        for wlen in WINDOWS:
+            c[f"d_{tag}_p{wlen}"] = _win_mean(x, -wlen, -1)
+            c[f"d_{tag}_f{wlen}"] = _win_mean(x, 1, wlen)
 
     # last-seen / next-seen snapshots (equal to the current frame while the ball is seen)
     kb = BALL_LAG

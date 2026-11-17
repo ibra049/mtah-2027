@@ -2,8 +2,8 @@
   "_doc": "Frame model (mtah.model): two LightGBM heads on mtah.features. Every value is chosen on external data only (leave-one-match-out over the 5 non-holdout IDSSE matches); nothing is fitted to the target.",
   "seed": 20271117,
 
-  "_stride": "Train on every stride-th frame per sequence from a random phase. 25 fps frames are near-duplicates; several noise draws per match add more than denser sampling, and it keeps a fold within the 8 GB machine.",
-  "stride": 8,
+  "_stride": "Train on every stride-th frame per sequence from a random phase. 25 fps frames are near-duplicates; six noise draws per match (nominal, stoppage, harsh x 2 seeds, each at its own phase) add more than denser sampling, and it keeps a fold within the 8 GB machine.",
+  "stride": 12,
   "_swap_prob": "Each training row is exchanged home<->away with this probability (exact feature transform). Prediction averages both orientations, so the output is exactly team-symmetric.",
   "swap_prob": 0.5,
 

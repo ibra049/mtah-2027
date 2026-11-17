@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import lightgbm as lgb
@@ -60,6 +61,24 @@ def change_labels(y, radius=CHANGE_RADIUS) -> np.ndarray:
     return out
 
 
+def keep_names(names, cfg) -> list:
+    """Feature names the model uses: all computed names minus cfg["drop_features"] (regexes,
+    matched with re.search). Order follows mtah.features."""
+    pats = [re.compile(p) for p in cfg.get("drop_features", [])]
+    return [n for n in names if not any(p.search(n) for p in pats)]
+
+
+def _select(X, names, wanted):
+    if list(names) == list(wanted):
+        return X
+    pos = {n: i for i, n in enumerate(names)}
+    missing = [n for n in wanted if n not in pos]
+    if missing:
+        raise ValueError(f"features missing from mtah.features: {missing[:5]} "
+                         f"({names_hash(names)} vs {names_hash(wanted)})")
+    return X[:, [pos[n] for n in wanted]]
+
+
 def _rng(cfg, seq, draw):
     key = [int(cfg["seed"]), int(draw), int(seq.period)] + [ord(ch) for ch in seq.match_id]
     return np.random.default_rng(key)
@@ -75,7 +94,9 @@ def sample(seq: Sequence, cfg: dict, draw: int = 0, X=None, names=None):
     stride = int(cfg["stride"])
     rows = np.arange(int(rng.integers(0, stride)), len(seq), stride)
     rows = rows[seq.y[rows] >= 0]
-    Xs = X[rows]
+    kept = keep_names(names, cfg)
+    Xs = _select(X[rows], names, kept)
+    names = kept
     Y = np.stack([seq.y[rows], change_labels(seq.y)[rows]], 1).astype(np.int8)
     flip = rng.random(len(rows)) < float(cfg["swap_prob"])
     if flip.any():
@@ -95,35 +116,56 @@ def _params(cfg, head):
     return p
 
 
-def _head_data(head, X, Y):
-    """Rows and binary target of one head."""
+DATASET_KEYS = ("max_bin", "min_data_in_bin", "bin_construct_sample_cnt")
+
+
+def _head_rows(head, Y):
+    """(row index or None for all rows, binary target) of one head."""
     y = Y[:, 0]
     if head == "dead":
-        return X, y == D
+        return None, y == D
     if head == "team":
-        m = y != D
-        return X[m], y[m] == H
-    return X, Y[:, 1] == 1
+        idx = np.flatnonzero(y != D)
+        return idx, y[idx] == H
+    return None, Y[:, 1] == 1
 
 
 def fit_arrays(X, Y, names, cfg, valid=None, log=None) -> dict:
-    """Train every head with a positive round count on sampled rows. valid=(Xv, Yv) only records
-    the per-round log-loss into `log` (dict head -> list); it never stops training: the round
-    count is a frozen config value."""
+    """Train every head with a positive round count on sampled rows.
+
+    X, Y: arrays, or lists of per-match arrays (binned once, never concatenated: a fold stays
+    small on the 8 GB machine). All heads share one binned dataset; the team head trains on its
+    alive-row subset. valid=(Xv, Yv) only records the per-round log-loss into `log` (dict head ->
+    list); it never stops training: the round count is a frozen config value."""
+    if isinstance(Y, (list, tuple)):
+        Y = np.concatenate(Y)
+    if isinstance(X, (list, tuple)) and len(X) == 1:
+        X = X[0]
     art = {"names": list(names), "cfg": cfg, "n_rows": {}}
+    ds_params = {k: v for k, v in cfg["lgb"].items() if k in DATASET_KEYS}
+    ds_params.update(feature_pre_filter=False, verbose=-1, seed=int(cfg["seed"]),
+                     data_random_seed=int(cfg["seed"]) + 3, deterministic=True, force_row_wise=True,
+                     num_threads=int(cfg["lgb"].get("num_threads", 1)))
+    base = lgb.Dataset(X, label=np.zeros(len(Y), np.float32), feature_name=list(names),
+                       free_raw_data=True, params=ds_params)
+    base.construct()
     for head in HEADS:
         rounds = int(cfg["rounds"].get(head, 0))
         if rounds <= 0:
             continue
-        Xh, yh = _head_data(head, X, Y)
-        ds = lgb.Dataset(Xh, label=yh.astype(np.float32), feature_name=list(names),
-                         free_raw_data=True)
+        idx, yh = _head_rows(head, Y)
+        ds = base if idx is None else base.subset(idx).construct()
+        ds.set_label(yh.astype(np.float32))
         kw, evals = {}, {}
         if valid is not None and log is not None:
-            Xv, yv = _head_data(head, *valid)
-            kw = dict(valid_sets=[lgb.Dataset(Xv, label=yv.astype(np.float32), reference=ds)],
+            Xv, Yv = valid
+            vidx, yv = _head_rows(head, Yv)
+            kw = dict(valid_sets=[ds.create_valid(Xv if vidx is None else Xv[vidx],
+                                                  label=yv.astype(np.float32))],
                       valid_names=["valid"], callbacks=[lgb.record_evaluation(evals)])
-        art[head] = lgb.train(_params(cfg, head), ds, num_boost_round=rounds, **kw)
+        params = _params(cfg, head)
+        params["feature_pre_filter"] = False
+        art[head] = lgb.train(params, ds, num_boost_round=rounds, **kw)
         art["n_rows"][head] = int(len(yh))
         if kw:
             log[head] = evals["valid"]["binary_logloss"]
@@ -142,7 +184,7 @@ def fit(seqs, cfg=None) -> dict:
         names = n
         Xs.append(X)
         Ys.append(Y)
-    return fit_arrays(np.concatenate(Xs), np.concatenate(Ys), names, cfg)
+    return fit_arrays(Xs, Ys, names, cfg)
 
 
 def _raw(booster, X):
@@ -151,9 +193,8 @@ def _raw(booster, X):
 
 def predict_X(art, X, names):
     """-> (proba float32 [T,3] in (H, A, D) order, aux dict of float32 [T])."""
-    if list(names) != art["names"]:
-        raise ValueError("feature names/order differ from the trained model "
-                         f"({names_hash(names)} vs {names_hash(art['names'])})")
+    X = _select(X, names, art["names"])      # the model's own columns, in its own order
+    names = art["names"]
     Xs = features.swap_features(X, names)
     p_dead = 0.5 * (_raw(art["dead"], X) + _raw(art["dead"], Xs))
     p_home = 0.5 * (_raw(art["team"], X) + 1.0 - _raw(art["team"], Xs))
@@ -163,7 +204,7 @@ def predict_X(art, X, names):
     out[:, D] = p_dead
     aux = {}
     if "change" in art:
-        aux["team_change"] = (0.5 * (_raw(art["change"], X) + _raw(art["change"], Xs))).astype(np.float32)
+        aux["turn_onset"] = (0.5 * (_raw(art["change"], X) + _raw(art["change"], Xs))).astype(np.float32)
     return out, aux
 
 
@@ -177,7 +218,7 @@ def predict_proba(art, seq: Sequence) -> np.ndarray:
 
 
 def predict_aux(art, seq: Sequence) -> dict:
-    """CONTRACT (optional): {"team_change": float32 [T]} = P(a direct team change lies within
+    """CONTRACT (optional): {"turn_onset": float32 [T]} = P(a direct team change lies within
     CHANGE_RADIUS frames). Empty if the artefact has no change head."""
     return predict_X(art, *features.compute(seq))[1]
 
@@ -198,6 +239,12 @@ def save(art, path) -> None:
             "heads": heads, "change_radius": CHANGE_RADIUS, "n_rows": art.get("n_rows", {}),
             "lightgbm": lgb.__version__, "info": art.get("info", {})}
     (path / "meta.json").write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
+
+
+def load_artefact(path, cfg=None) -> dict:
+    """Loader convention of the predict assembly (mtah.predict). cfg is not needed: the artefact
+    carries its own feature list and training config."""
+    return load(path)
 
 
 def load(path) -> dict:
