@@ -1,0 +1,38 @@
+{
+ "_doc": "Simulated Smart-Tagging-like SET PIECES intervals for external (DFL) halves. Restarts = first alive frame after each dead run of the clean DFL labels; type from ball position at the restart (geometry, metres, origin centre); team = possessor after the restart, except throw-ins which are always N (DATA.md: every throw-in tagged N/A). All noise values are ASSUMPTIONS (DATA.md: tags are automatic, with false positives and negatives; no rates published).",
+ "_geometry": "first restart of each half = Kick Off (Start); later restarts: kick-off (after goal) within 5 m of the centre spot; corner: within 3 m of goal line and 4 m of touchline; goal kick: within 7 m of goal line and |y|<10 m; throw-in: within 2.5 m of touchline; else free kick (includes drop balls/penalties).",
+ "kickoff_r_m": 5.0,
+ "corner_goal_line_m": 3.0,
+ "corner_touch_line_m": 4.0,
+ "goalkick_goal_line_m": 7.0,
+ "goalkick_half_width_m": 10.0,
+ "throwin_touch_line_m": 2.5,
+ "noise": {
+  "clean": {
+   "jitter_s": 0.0,
+   "miss": 0.0,
+   "false_pos_per_half": 0,
+   "extra_n": 0.0,
+   "wrong_type": 0.0
+  },
+  "nominal": {
+   "jitter_s": 1.0,
+   "miss": 0.1,
+   "false_pos_per_half": 2,
+   "extra_n": 0.05,
+   "wrong_type": 0.05
+  },
+  "harsh": {
+   "jitter_s": 2.5,
+   "miss": 0.25,
+   "false_pos_per_half": 6,
+   "extra_n": 0.15,
+   "wrong_type": 0.15
+  }
+ },
+ "_window": "decoder-7d / starter/load_smart_tagging.py: only fact is a ~5 s window around the restart that contains it. Window length ~U(lo,hi) s, restart at a uniform position inside, then jitter. No fixed offset.",
+ "window_len_s": [
+  3.0,
+  7.0
+ ]
+}

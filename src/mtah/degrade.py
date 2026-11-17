@@ -96,6 +96,24 @@ def _bisect(f, target, lo, hi, n=16):
     return 0.5 * (lo + hi)
 
 
+def ball_dropout_alive(seq, rng, cfg):
+    """For sources whose clean ball is already missing in stoppages (Metrica sample): keep those
+    gaps, and solve the base hazard so the missing share over ALIVE frames (y in H/A), counting
+    existing gaps, equals ball_missing_frac. Returns the NEW missing mask only."""
+    T = len(seq)
+    logit = _ball_hazard_logit(seq, cfg)
+    p_stop = 1.0 / (cfg["ball_gap_mean_s"] * FPS)
+    u1, u2 = rng.random(T), rng.random(T)
+    alive = np.isin(seq.y, (0, 1))
+    existing = np.isnan(seq.ball[:, 0])
+
+    def run(base):
+        return _gilbert(u1, u2, np.minimum(np.exp(base + logit), 1.0), p_stop)
+
+    base = _bisect(lambda b: (run(b) | existing)[alive].mean(), cfg["ball_missing_frac"], -12.0, 2.0, n=18)
+    return run(base)
+
+
 def ball_dropout(seq, rng, cfg):
     T = len(seq)
     logit = _ball_hazard_logit(seq, cfg)
@@ -286,7 +304,7 @@ def wrong_team(home, away, rng, cfg):
 # ---------------------------------------------------------------- entry point
 def apply(seq: Sequence, rng: np.random.Generator, cfg: dict) -> Sequence:
     out = seq.copy()
-    miss = ball_dropout(seq, rng, cfg)
+    miss = ball_dropout_alive(seq, rng, cfg) if cfg.get("ball_target_alive") else ball_dropout(seq, rng, cfg)
     ball = seq.ball.copy()
     ball[:, :2] += _ar1((len(seq), 2), rng, cfg["ball_jitter_m"], cfg["jitter_rho"])
     ball[miss] = np.nan
