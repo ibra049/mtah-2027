@@ -144,6 +144,15 @@ the 5 out-of-fold matches, seeds 0 and 1 (`scripts/model_decode_eval.py`). Basel
 
 | lgb_v4s | 404: v4 set without the per-half gap descriptors, + set-piece crowding and speed-spread cues | nominal, stoppage, harsh (one seed), nominal_lj, stoppage_lj, nominal_sm, stoppage_sm (two seeds) | 0.6631 | 0.6828 | 0.6301 | smoothed profiles 0.6579 / 0.6862 (v4: 0.6515 / 0.6836) |
 
+| lgb_v4m | 404: as lgb_v4s | as lgb_v4s, plus the three Metrica sample games (same eleven draws) | 0.6630 | 0.6870 | 0.6302 | smoothed profiles 0.6534 / 0.6887; Metrica (leave-one-game-out) +0.015 to +0.035 over lgb_v4 on every profile |
+
+lgb_v4m's out-of-fold DFL folds train on the four other DFL matches plus all three Metrica games;
+its Metrica predictions come from one fold per game trained without that game. Its gain on the
+Metrica games is mostly where a stoppage starts and ends (dead-ball recall in the first 2 s of a
+stoppage 0.70 -> 0.83 and in the last 2 s 0.79 -> 0.91 on stoppage_sm; decoded stops matched
+within 1 s 0.68 -> 0.78, restarts 0.81 -> 0.88) and the extent of the possessions next to it;
+team identity on short possessions does not improve. On DFL the same boundaries do not move.
+
 On the Metrica sample games (the target provider's own data, never trained on; all-5 models):
 smoothed profiles nominal_sm / stoppage_sm: lgb_v1 0.6581 / 0.6955, lgb_v4 0.6910 / 0.7311,
 lgb_v4s 0.7023 / 0.7365.
