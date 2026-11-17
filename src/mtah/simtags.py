@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .canonical import A, D, FPS, H, TAG_DTYPE
+from .relabel import min_control
 
 CFG = Path(__file__).resolve().parents[2] / "configs" / "tags.json"
 TYPES = ["Throw-in", "Corner Kick", "Goal Kick", "Free Kick", "Kick Off (After Goal)", "Kick Off (Start)"]
@@ -96,5 +97,112 @@ def make_tags(seq, cfg, noise, rng):
         typ = str(rng.choice(TYPES[:4]))
         team = "N" if typ == "Throw-in" else str(rng.choice(["H", "A"]))
         out.append((s, e, "SET PIECES", team, typ, HALF[int(seq.period)]))
+    out.sort(key=lambda r: r[0])
+    return np.array(out, dtype=TAG_DTYPE)
+
+
+# ------------------------------------------------------------------ phases
+ATT = {0: "BUILD UP", 1: "PROGRESSION", 2: "BALL IN FINAL THIRD"}
+DEF = {0: "DEFENDING IN ATTACKING THIRD", 1: "DEFENDING IN MIDDLE THIRD", 2: "DEFENDING IN DEFENSIVE THIRD"}
+PHASE_CODES = list(ATT.values()) + list(DEF.values()) + ["ATTACKING TRANSITION", "DEFENSIVE TRANSITION"]
+
+
+def _runs_of(vals):
+    b = np.flatnonzero(np.diff(vals) != 0) + 1
+    return list(zip(np.r_[0, b], np.r_[b, len(vals)]))
+
+
+def phase_records(seq, cfg):
+    """[(start_idx, end_idx, code, team)] noise-free, indices into the half."""
+    y = min_control(seq.y, int(round(cfg["phase_tau_s"] * FPS)))
+    # attacking direction: a team attacks towards +x if its mean x over the half is negative
+    hx, ax = np.nanmean(seq.home[..., 0]), np.nanmean(seq.away[..., 0])
+    sign = {H: 1.0 if hx < ax else -1.0, A: 1.0 if ax < hx else -1.0}
+    L = float(seq.pitch[0])
+    bx = seq.ball[:, 0]
+    out = []
+    min_len = int(round(cfg["phase_min_s"] * FPS))
+    tr = int(round(cfg["transition_s"] * FPS))
+    runs = _runs_of(y)
+    for i, (s, e) in enumerate(runs):
+        team = int(y[s])
+        if team not in (H, A):
+            continue
+        other = A if team == H else H
+        tname, oname = ("H", "A") if team == H else ("A", "H")
+        # thirds from the attacker's perspective: 0 own third, 1 middle, 2 final
+        xa = sign[team] * bx[s:e]
+        zone = np.where(np.isnan(xa), -1, np.digitize(xa, [-L / 6, L / 6])).astype(np.int8)
+        zone = _fill(zone)
+        for zs, ze in _runs_of(zone):
+            if ze - zs < min_len or zone[zs] < 0:
+                continue
+            z = int(zone[zs])
+            out.append((s + zs, s + ze, ATT[z], tname))
+            out.append((s + zs, s + ze, DEF[z], oname))
+        if i > 0 and int(y[runs[i - 1][0]]) == other and e - s >= min_len:   # open-play turnover
+            out.append((s, min(e, s + tr), "ATTACKING TRANSITION", tname))
+            out.append((s, min(e, s + tr), "DEFENSIVE TRANSITION", oname))
+    return out
+
+
+def _fill(zone):
+    """Carry the last known zone over frames without a ball position."""
+    z = zone.copy()
+    last = -1
+    for t in range(len(z)):
+        if z[t] < 0:
+            z[t] = last
+        else:
+            last = z[t]
+    return z
+
+
+PAIR = {"BUILD UP": "DEFENDING IN ATTACKING THIRD", "PROGRESSION": "DEFENDING IN MIDDLE THIRD",
+        "BALL IN FINAL THIRD": "DEFENDING IN DEFENSIVE THIRD", "ATTACKING TRANSITION": "DEFENSIVE TRANSITION"}
+
+
+def select_phases(recs, cfg, rng):
+    """Thin to the published per-match density: longest attacking phases first, N ~ Poisson(n/2)
+    per half; the paired defending code on the longest of the kept ones."""
+    counts = cfg["phase_count_per_match"]
+    att = [r for r in recs if r[2] in PAIR]
+    dfn = {(r[0], r[1], r[2]): r for r in recs if r[2] not in PAIR}
+    out = []
+    for code, dcode in PAIR.items():
+        cand = sorted((r for r in att if r[2] == code), key=lambda r: r[0] - r[1])   # longest first
+        kept = cand[:int(rng.poisson(counts[code] / 2))]
+        out += kept
+        nd = int(rng.poisson(counts[dcode] / 2))
+        for r in kept[:nd]:
+            d = dfn.get((r[0], r[1], dcode))
+            if d is not None:
+                out.append(d)
+    return out
+
+
+def make_phase_tags(seq, cfg, noise, rng):
+    T = len(seq)
+    out = []
+    j = noise["jitter_s"] * FPS
+    half = HALF[int(seq.period)]
+    for s, e, code, team in select_phases(phase_records(seq, cfg), cfg, rng):
+        if rng.random() < noise["miss"]:
+            continue
+        if rng.random() < noise["stop_short"]:
+            e = s + max(1, int((e - s) * rng.uniform(0.3, 0.9)))
+        elif rng.random() < noise["spill"]:
+            e = e + int(round(rng.uniform(*noise["spill_s"]) * FPS))
+        if j > 0:
+            s += int(round(rng.normal(0, j))); e += int(round(rng.normal(0, j)))
+        s, e = max(0, s), min(T, max(e, s + 1))
+        if s >= T:
+            continue
+        f0 = int(seq.frame[s])
+        out.append((f0, f0 + (e - s), code, team, "", half))
+    for _ in range(int(noise["false_pos_per_half"])):
+        s = int(rng.integers(0, T)); L = int(rng.uniform(2, 15) * FPS)
+        f0 = int(seq.frame[s])
+        out.append((f0, f0 + L, str(rng.choice(PHASE_CODES)), str(rng.choice(["H", "A"])), "", half))
     out.sort(key=lambda r: r[0])
     return np.array(out, dtype=TAG_DTYPE)
