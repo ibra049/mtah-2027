@@ -136,6 +136,27 @@ Profiles, two fixed noise seeds each:
   - How strongly an automatic tracker filters, and how long its tracklets last, is undocumented,
     so both remain ASSUMPTIONS.
 
+What each profile produces, measured on 14 DFL halves (seed 0, medians). The ball columns use
+`mtah.ball_audit`, the same code as the audit of the provided tracking. Per-half ranges are in
+`docs/degrade_profiles.md`.
+
+| profile | what it models | ball observed | ball missing alive / dead | ball velocity ac1 | Δv ±3 fr q99 (m/s) | player ac1 | player speed (m/s) | stillness | tracklet median |
+|---|---|---|---|---|---|---|---|---|---|
+| clean DFL | reference | 1.000 | 0 / 0 | .35 | 14.8 | .79 | 1.46 | .029 | 2765 s |
+| nominal | facts; loss biased to crowded, aerial and fast play; jitter | .594 | .36 / .48 | −.01 | 19.0 | .29 | 3.24 | 0 | 18.5 s |
+| stoppage | ball lost mainly in stoppages (ratio 2–10×) | .593 | .13 / .68 | .01 | 19.1 | .25 | 3.26 | 0 | 15.9 s |
+| harsh | stress: 50% observed, more fragmentation and jitter | .501 | .45 / .60 | −.04 | 29.9 | .08 | 5.21 | 0 | 8.8 s |
+| nominal_lj | nominal, jitter 0.005–0.05 m | .594 | .32 / .50 | −.01 | 17.9 | .75 | 1.47 | .021 | 17.8 s |
+| stoppage_lj | stoppage, jitter 0.005–0.05 m | .594 | .12 / .75 | .00 | 17.8 | .75 | 1.49 | .015 | 21.8 s |
+| nominal_sm | _lj + tracker filter (ball σ 1–8 fr, players 1–4 fr, gap fill 0.5–2 s), tracklets 10–300 s | .595 | .32 / .49 | .98 | 12.0 | 1.00 | 1.41 | .024 | 42.5 s |
+| stoppage_sm | the same on stoppage | .594 | .11 / .71 | .97 | 11.5 | 1.00 | 1.42 | .025 | 33.2 s |
+| gapstress | stress: alive gaps 25–40% (3–5 s) and dead loss 80–98% | .407 | .35 / .86 | .08 | 18.9 | .20 | 3.64 | 0 | 15.8 s |
+
+Every profile holds the documented facts fixed: ball missing 40.7% (50% in harsh, more in
+gapstress by design), about 20.5 visible objects for 22 players, 46 slots without identities,
+and no ball height. Everything else is an ASSUMPTION, drawn per half over a wide range and saved
+with each draw.
+
 The low-jitter and smoothed ranges were widened after label-free audits of the provided tracking
 (Section 9) showed that the original profiles were too jittery and their ball track too rough.
 The new ranges are randomised per half and deliberately wide. Nothing was fitted or matched to
