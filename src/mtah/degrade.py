@@ -32,7 +32,7 @@ def load_cfg(path=DEFAULT_CFG) -> dict:
     return cfg
 
 
-PROFILES = ("nominal", "harsh", "stoppage")
+PROFILES = ("nominal", "harsh", "stoppage", "gapstress", "nominal_lj", "stoppage_lj")
 
 
 def load_profile(name, path=DEFAULT_CFG) -> dict:
@@ -115,7 +115,8 @@ def ball_dropout_alive(seq, rng, cfg):
         return _gilbert(u1, u2, np.minimum(np.exp(base + logit), 1.0), p_stop)
 
     on = slice(None) if cfg.get("ball_target_overall") else alive
-    base = _bisect(lambda b: (run(b) | existing)[on].mean(), cfg["ball_missing_frac"], -12.0, 2.0, n=18)
+    target = cfg.get("alive_missing_frac", cfg["ball_missing_frac"])
+    base = _bisect(lambda b: (run(b) | existing)[on].mean(), target, -12.0, 2.0, n=18)
     return run(base)
 
 
@@ -344,12 +345,40 @@ def degraded_profile(seq, profile_cfg, seed=0):
     return apply(seq, rng, cfg), drawn
 
 
+def still_share(seq, window_s=5.0, max_extent_m=0.2) -> float:
+    """Share of observed player object-frames lying in a fully observed window of window_s whose
+    positions span less than max_extent_m (bounding-box diagonal). Clean tracking has these
+    (players standing); heavy position jitter erases them."""
+    from scipy.ndimage import maximum_filter1d, minimum_filter1d
+    w = int(round(window_s * FPS))
+    P = np.concatenate([seq.home, seq.away], 1).astype(np.float64)       # [T,K,2]
+    obs = ~np.isnan(P[..., 0])
+    if obs.sum() == 0 or len(P) < w:
+        return float("nan")
+    # window [t, t+w): use filters centred at t + w//2 (origin shift)
+    o = -(w // 2)
+    mx = maximum_filter1d(np.where(obs[..., None], P, -1e9), w, axis=0, mode="nearest", origin=o)
+    mn = minimum_filter1d(np.where(obs[..., None], P, 1e9), w, axis=0, mode="nearest", origin=o)
+    cnt = np.cumsum(np.r_[np.zeros((1, obs.shape[1])), obs], 0)
+    T = len(P)
+    full = np.zeros_like(obs)
+    full[:T - w + 1] = (cnt[w:] - cnt[:-w]) == w                          # window starting at t fully observed
+    ext = np.hypot(mx[..., 0] - mn[..., 0], mx[..., 1] - mn[..., 1])
+    still_start = full & (ext < max_extent_m)
+    # mark every frame covered by a still window starting at t (t .. t+w-1)
+    c = np.cumsum(np.r_[np.zeros((1, obs.shape[1])), still_start], 0)
+    lo = np.clip(np.arange(T) - w + 1, 0, T)
+    covered = (c[np.arange(T) + 1] - c[lo]) > 0
+    return float((covered & obs).sum() / obs.sum())
+
+
 def summary(seq) -> dict:
     n_vis = np.sum(~np.isnan(seq.home[..., 0]), 1) + np.sum(~np.isnan(seq.away[..., 0]), 1)
     ball_obs = ~np.isnan(seq.ball[:, 0])
     gaps = [e - s for s, e in _runs(~ball_obs)]
     return {"ball_obs": float(ball_obs.mean()), "mean_objects": float(n_vis.mean()),
             "max_objects": int(n_vis.max()), "frac_gt22": float((n_vis > 22).mean()),
+            "still_share": still_share(seq),
             "ball_gap_mean_s": float(np.mean(gaps)) / FPS if gaps else 0.0,
             "slots_used": int(np.sum(np.any(~np.isnan(seq.home[..., 0]), 0))
                               + np.sum(np.any(~np.isnan(seq.away[..., 0]), 0)))}
