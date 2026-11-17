@@ -1,0 +1,8 @@
+{
+  "_doc": "Candidate v3: lgb_v3 frame model (feature version 3: touch thresholds relative to each half's own noise, off-pitch filter, box bounds) + the frozen decoder configs/decoder.json, kickoff rule on.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {"module": "mtah.model", "artefact": "models/lgb_v3"},
+  "decoder": {"module": "mtah.decode", "cfg_path": "configs/decoder.json"}
+}

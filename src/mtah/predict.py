@@ -53,6 +53,9 @@ def load_model(spec: dict):
     path = spec.get("artefact")
     cfg = spec.get("cfg", {})
     if path is None:
+        # composite models (e.g. mtah.model_hybrid) name their artefacts inside cfg
+        if hasattr(mod, "load_artefact"):
+            return mod, mod.load_artefact(None, cfg)
         return mod, cfg
     path = _repo_path(path)
     if hasattr(mod, "load_artefact"):

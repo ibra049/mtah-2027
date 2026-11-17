@@ -24,14 +24,19 @@ def main(argv=None):
     ap.add_argument("--matches", nargs="+", required=True)
     ap.add_argument("--sub", required=True)
     ap.add_argument("--draws", default="nominal:0,nominal:1,stoppage:0,stoppage:1,harsh:0,harsh:1")
+    ap.add_argument("--folds", action="store_true",
+                    help="predict each match with the fold model that never saw it "
+                         "(outputs/folds/<name>/<match>/), e.g. to add a new profile to oof/")
+    ap.add_argument("--out-name", help="write under preds/<out-name>/ instead of preds/<name>/")
     args = ap.parse_args(argv)
-    if args.sub == "oof":
-        raise SystemExit("out-of-fold files come from scripts/model_lomo.py only")
-    art = model.load(ROOT / "models" / args.name)
+    folds = ROOT / "outputs" / "folds" / args.name
+    if args.sub in ("oof", "metrica_oof") and not args.folds:
+        raise SystemExit("out-of-fold files need --folds (the fold models kept by model_lomo.py)")
+    art = None if args.folds else model.load(ROOT / "models" / args.name)
     n = 0
     for draw in args.draws.split(","):
         profile, seed = draw.split(":")
-        dst = EXT / "preds" / args.name / args.sub / f"{profile}_{seed}"
+        dst = EXT / "preds" / (args.out_name or args.name) / args.sub / f"{profile}_{seed}"
         (dst / "aux").mkdir(parents=True, exist_ok=True)
         for match in args.matches:
             for period in (1, 2):
@@ -39,6 +44,9 @@ def main(argv=None):
                 if not src.exists():                     # e.g. Metrica has no stoppage profile
                     continue
                 seq = Sequence.load(src)
+                if args.folds and (art is None or art.get("_match") != match):
+                    art = model.load(folds / match)
+                    art["_match"] = match
                 p, aux = model.predict_both(art, seq)
                 assert np.isfinite(p).all()
                 np.savez_compressed(dst / f"{match}_{period}.npz", proba=p,
