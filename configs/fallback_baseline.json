@@ -1,0 +1,5 @@
+{
+  "_doc": "Fallback submission: the official nearest-player + smooth50 baseline (published floor).",
+  "method": "baseline",
+  "window": 50
+}
