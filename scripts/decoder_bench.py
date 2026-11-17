@@ -23,7 +23,8 @@ grid    coarse grid over at most four parameters; choice by minimax regret over 
         then the centre of the plateau (mean worst-regret of a config and its grid neighbours).
 compare the paired adoption rule for config B against config A (json strings or files).
 stats   structure of the decoded labels per match next to the truth (possession count, mean
-        duration, share under 1 / 2 / 4 s, dead share): the envelope for label-free target checks.
+        duration, share under 1 / 2 / 4 s, dead share; dead runs per half, their median length
+        and share under 3 / 5 / 8 s): the envelope for label-free target checks.
 export  write label predictions in the layout scripts/eval_external.py reads.
 synth   stand-in probabilities built from the fine labels with bursty errors, blurred boundaries
         and lower confidence where the degraded ball is missing (until real OOF files exist).
@@ -387,18 +388,24 @@ def cmd_compare(args):
 # ------------------------------------------------------------------------------------ stats
 def spell_stats(halves):
     """Structure of a label track (two halves): what the label-free target check looks at."""
-    lens, dead, total = [], 0, 0
+    lens, dlens, dead, total = [], [], 0, 0
     for y in halves:
         y = np.asarray(y)
-        for a, b, lab in dec.segments(y):
+        segs = dec.segments(y)
+        for i, (a, b, lab) in enumerate(segs):
             if lab != D:
                 lens.append(b - a)
+            elif 0 < i < len(segs) - 1:          # dead runs cut by the half are not counted
+                dlens.append(b - a)
         dead += int(np.sum(y == D))
         total += len(y)
-    lens = np.asarray(lens, dtype=float)
+    lens, dlens = np.asarray(lens, dtype=float), np.asarray(dlens, dtype=float)
     return {"n": len(lens), "mean_s": float(lens.mean() / FPS), "<1s": float(np.mean(lens < 25)),
             "<2s": float(np.mean(lens < 50)), "<4s": float(np.mean(lens < 100)),
-            "dead": dead / total, "minutes": total / FPS / 60}
+            "dead": dead / total, "minutes": total / FPS / 60,
+            "nD/half": len(dlens) / len(halves), "medD_s": float(np.median(dlens) / FPS),
+            "D<3s": float(np.mean(dlens < 75)), "D<5s": float(np.mean(dlens < 125)),
+            "D<8s": float(np.mean(dlens < 200))}
 
 
 def cmd_stats(args):
@@ -407,7 +414,7 @@ def cmd_stats(args):
     data, _ = load_source(args.model)
     views = label_views(load_labels(), taus)
     preds = predict(dec.resolve_cfg(args.cfg), data)
-    cols = ("n", "mean_s", "<1s", "<2s", "<4s", "dead")
+    cols = ("n", "mean_s", "<1s", "<2s", "<4s", "dead", "nD/half", "medD_s", "D<3s", "D<5s", "D<8s")
     print(f"model={args.model} cfg={args.cfg or 'defaults'}; n = possessions per match (two halves)")
     print(f"{'match':<8}{'source':<16}" + "".join(f"{c:>9}" for c in cols) + f"{'n/90min':>9}")
     rows = {}
