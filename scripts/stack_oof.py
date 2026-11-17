@@ -167,6 +167,8 @@ def main():
                 params={k: v for k, v in stack.DEFAULT_CFG.items()},
                 note="fitted on leave-one-match-out out-of-fold probabilities of the base model; "
                      "holdout matches and the target never read")
+            reg = model_stacked.write_regression(args.save)
+            print(f"regression case written: {reg}", flush=True)
         print(f"all-match stacker done ({time.time() - t0:.0f}s)", flush=True)
     imp = booster.feature_importance("gain")
     top = np.argsort(-imp)[:15]
