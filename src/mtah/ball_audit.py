@@ -85,6 +85,8 @@ def audit(seq, canon=None, with_nobs=False) -> dict:
     out["g1"] = dict(obs=obs.mean(), gaps=len(gaps), gap_med=q[0], gap_p75=q[1], gap_p90=q[2],
                      miss_in_ge4=sum((b - a) for a, b in _runs(~obs) if b - a >= 4 * FPS) / miss,
                      miss_in_ge10=sum((b - a) for a, b in _runs(~obs) if b - a >= 10 * FPS) / miss)
+    out["g1b"] = {f"miss_in_ge{L}": sum((b - a) for a, b in _runs(~obs) if b - a >= L * FPS) / miss
+                  for L in (20, 30)}
 
     # g2 speed
     c3 = np.zeros(T, bool)
@@ -187,6 +189,11 @@ def emit(src, half, res, prefix=""):
 
 
 def external_sources():
+    """(source, half, path) for every external reference; shared by ball_audit and player_audit.
+    stoppage_sm: every half of seeds 0 and 1 (DFL and Metrica), source tagged with the drawn
+    ball smoothing sigma (frames) from its sidecar."""
+    import glob
+    import json
     dfl = ("J03WMX", "J03WN1")
     for m in dfl:
         for p in (1, 2):
@@ -194,10 +201,22 @@ def external_sources():
     for g in (1, 2, 3):
         for p in (1, 2):
             yield "metrica_clean", f"M{g}_{p}", os.path.join(EXT, "cache_metrica", f"METRICA{g}_{p}.npz")
-    for prof in ("nominal_lj", "stoppage_lj"):
+    for prof in ("nominal", "stoppage", "nominal_lj", "stoppage_lj"):
         for m in dfl:
             for p in (1, 2):
                 yield prof, f"{m}_{p}", os.path.join(EXT, "cache_deg", prof, "0", f"{m}_{p}.npz")
+    for seed in ("0", "1"):
+        for path in sorted(glob.glob(os.path.join(EXT, "cache_deg", "stoppage_sm", seed, "*.npz"))):
+            if path.endswith(".tmp.npz"):
+                continue
+            half = os.path.basename(path)[:-4]
+            sig = ""
+            try:
+                with open(path[:-4] + ".json") as fh:
+                    sig = f"{json.load(fh)['drawn']['ball_smooth_sigma_f']:.1f}"
+            except (OSError, KeyError, ValueError):
+                pass
+            yield "stoppage_sm", f"s{seed}_{half}_sig{sig}", path
 
 
 def main(argv=None):

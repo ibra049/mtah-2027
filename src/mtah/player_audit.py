@@ -93,18 +93,7 @@ def emit(src, half, res, prefix=""):
               flush=True)
 
 
-def external_sources():
-    dfl = ("J03WMX", "J03WN1")
-    for m in dfl:
-        for p in (1, 2):
-            yield "dfl_clean", f"{m}_{p}", os.path.join(EXT, "cache", f"{m}_{p}.npz")
-    for g in (1, 2, 3):
-        for p in (1, 2):
-            yield "metrica_clean", f"M{g}_{p}", os.path.join(EXT, "cache_metrica", f"METRICA{g}_{p}.npz")
-    for prof in ("nominal_lj", "stoppage_lj", "stoppage"):
-        for m in dfl:
-            for p in (1, 2):
-                yield prof, f"{m}_{p}", os.path.join(EXT, "cache_deg", prof, "0", f"{m}_{p}.npz")
+from mtah.ball_audit import external_sources  # noqa: E402  (one shared source list)
 
 
 def resolve_canon(name):
