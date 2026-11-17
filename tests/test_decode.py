@@ -10,9 +10,8 @@ from mtah import decode as dec
 from mtah.canonical import A, D, H
 from mtah.evaluate import pm, to_codes
 
-CFG = {"method": "segment", "cost_cap": 4605, "dead_bias": 0,
-       "pen_turn": 40000, "pen_stop": 25000, "pen_restart": 25000,
-       "min_turn": 50, "min_restart": 12, "min_dead": 25}
+CFG = {"method": "segment", "cost_cap": 4605, "dead_bias": 0, "switch_cost": 20000,
+       "min_poss": 50, "min_dead": 25}
 
 SURE_H, SURE_A, SURE_D = (0.90, 0.05, 0.05), (0.05, 0.90, 0.05), (0.05, 0.05, 0.90)
 FLAT = (1 / 3, 1 / 3, 1 / 3)
@@ -107,8 +106,29 @@ def test_occlusion_gap_across_a_turnover_gives_exactly_two_possessions():
 def test_stoppage_splits_possessions_and_short_dead_blip_does_not():
     p = proba((200, SURE_H), (200, SURE_D), (200, SURE_H))
     assert runs(dec.decode(p, None, CFG)) == [(H, 200), (D, 200), (H, 200)]
-    blip = proba((200, SURE_H), (6, SURE_D), (200, SURE_H))
+    blip = proba((200, SURE_H), (6, SURE_D), (200, SURE_H))            # too weak for the search
     assert runs(dec.decode(blip, None, CFG)) == [(H, 406)]
+    blip = proba((200, SURE_H), (20, SURE_D), (200, SURE_H))           # found, then under min_dead
+    assert runs(dec.decode(blip, None, CFG)) == [(H, 420)]
+    assert runs(dec.decode(blip, None, dict(CFG, min_dead=1))) == [(H, 200), (D, 20), (H, 200)]
+
+
+def test_short_dead_between_teams_goes_to_the_team_that_had_the_ball():
+    p = proba((150, SURE_H), (15, SURE_D), (150, SURE_A))
+    assert runs(dec.decode(p, None, CFG)) == [(H, 165), (A, 150)]
+
+
+def test_min_poss_is_min_control_on_the_decoded_path():
+    # two short opponent runs in a row are both absorbed; the third is long enough
+    p = proba((100, SURE_H), (30, SURE_A), (20, SURE_H), (30, SURE_A), (40, SURE_H), (100, SURE_A))
+    assert runs(dec.decode(p, None, CFG)) == [(H, 220), (A, 100)]
+    assert [n for _, n in runs(dec.decode(p, None, dict(CFG, min_poss=1)))] == [100, 30, 20, 30, 40, 100]
+
+
+def test_hard_minimum_inside_the_search_is_still_available():
+    p = proba((150, SURE_H), (30, SURE_A), (150, SURE_H))
+    out = dec.decode(p, None, dict(CFG, min_poss=1, hard_min_turn=50, hard_min_restart=50))
+    assert runs(out) == [(H, 130), (A, 50), (H, 150)]      # stretched to the minimum, not absorbed
 
 
 def test_restart_names_the_team_the_whole_spell_supports():
@@ -188,7 +208,7 @@ def test_unknown_config_key_is_an_error():
 
 # ---------------------------------------------------------------------------- post-processing
 def test_prune_merges_short_low_margin_spell_only():
-    cfg = dict(CFG, min_turn=1, pen_turn=0, prune_len_poss=75, prune_margin_poss=400)
+    cfg = dict(CFG, switch_cost=0, min_poss=1, min_dead=1, prune_len_poss=75, prune_margin_poss=400)
     weak = proba((150, SURE_H), (40, (0.40, 0.50, 0.10)), (150, SURE_H))     # margin 223/frame
     assert runs(dec.decode(weak, None, cfg)) == [(H, 340)]
     strong = proba((150, SURE_H), (40, SURE_A), (150, SURE_H))               # margin 2890/frame
@@ -198,7 +218,7 @@ def test_prune_merges_short_low_margin_spell_only():
 
 
 def test_prune_dead_joins_the_possession_around_it():
-    cfg = dict(CFG, min_dead=1, pen_stop=0, pen_restart=0, prune_len_dead=50, prune_margin_dead=400)
+    cfg = dict(CFG, switch_cost=0, min_poss=1, min_dead=1, prune_len_dead=50, prune_margin_dead=400)
     p = proba((150, SURE_A), (20, (0.10, 0.40, 0.50)), (150, SURE_A))
     assert runs(dec.decode(p, None, cfg)) == [(A, 320)]
 
@@ -209,6 +229,21 @@ def test_shift_boundaries_by_transition_type():
     assert runs(out) == [(H, 47), (A, 57), (D, 44), (H, 52)]
     tiny = np.array([H, A, D, H], np.int8)                      # nothing may vanish
     assert runs(dec.shift_boundaries(tiny, 30, -30, 30)) == [(H, 1), (A, 1), (D, 1), (H, 1)]
+
+
+def test_snap_moves_team_changes_to_the_onset_peak_only():
+    y = np.array([H] * 100 + [A] * 100 + [D] * 50 + [H] * 50, np.int8)
+    onset = np.zeros(300)
+    onset[92], onset[205], onset[250] = 0.8, 0.9, 0.9
+    out = dec.snap_boundaries(y, onset, 12, 0.3)
+    assert runs(out) == [(H, 92), (A, 108), (D, 50), (H, 50)]          # D boundaries untouched
+    assert runs(dec.snap_boundaries(y, onset * 0.3, 12, 0.3)) == runs(y)        # peak too low
+    assert runs(dec.snap_boundaries(y, onset, 5, 0.3)) == runs(y)               # peak too far
+    p = proba((100, SURE_H), (100, SURE_A), (50, SURE_D), (50, SURE_H))
+    cfg = dict(CFG, snap_radius=12)
+    assert runs(dec.decode(p, None, cfg, aux={"turn_onset": onset})) == runs(out)
+    assert runs(dec.decode(p, None, cfg)) == runs(y)                   # works without aux
+    assert runs(dec.decode(p, None, cfg, aux={"other": onset})) == runs(y)
 
 
 # -------------------------------------------------------------------------------- tag priors
@@ -225,7 +260,7 @@ class Seq:
 def test_tags_are_off_by_default_and_bounded():
     seq = Seq(600, [(1100, 1400, "BUILD UP", "A", "", "1st Half")])
     p = proba((600, (0.38, 0.36, 0.26)))
-    low = dict(CFG, pen_turn=3000)
+    low = dict(CFG, switch_cost=3000)
     assert runs(dec.decode(p, seq, low)) == [(H, 600)]                       # switch off
     on = dict(low, tags={"enabled": True})
     out = dec.decode(p, seq, on)

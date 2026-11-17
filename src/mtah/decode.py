@@ -11,20 +11,29 @@ Pipeline (cfg "method": "segment"; "argmax" and "smooth" are the simpler referen
                         at `cost_cap` so one confident wrong frame cannot force a switch.
   2. tag priors         optional, bounded, rule-based (Smart Tagging; switches in cfg["tags"]).
   3. forced frames      `forced` int8 [T]: -1 free, otherwise the label that must be emitted.
-  4. segment Viterbi    exact minimum-cost segmentation with a penalty per transition type and a
-                        minimum duration per segment type (explicit-duration / semi-Markov with a
-                        hard lower bound, O(T)).
-  5. pruning            short segments with a low evidence margin are merged into a neighbour.
-  6. timing offsets     one signed frame offset per transition type (tuned on external data).
+  4. segment Viterbi    exact minimum-cost segmentation with a switch cost per transition
+                        (`switch_cost`, or one penalty per transition type) and optional hard
+                        minimum durations (explicit-duration search, O(T)).
+  5. minimum dead       D runs shorter than `min_dead` go back to the team that had the ball.
+  6. controlled poss.   `min_poss`: relabel.min_control applied to the decoded path -- an
+                        opponent run counts as a change of possession only if it lasts that
+                        long; the first run after a restart always keeps its team. This is the
+                        one parameter that carries the definition of "controlled possession".
+  7. pruning            optional: short segments with a low evidence margin join a neighbour.
+  8. timing             optional snap of team changes to a model onset peak (`aux`), then one
+                        signed frame offset per transition type (measured on external data).
+
+Tuned parameters (CONTRACT: at most four, coarse grid, centre of the plateau): `switch_cost`,
+`min_poss`, `min_dead`, and the boundary offsets. Everything else stays at its documented default.
 
 How the rules of CHALLENGE.md are encoded
   * possession persists through loose balls   uninformative frames cost the same in every state,
-                                              so the path keeps its label; a change of team costs
-                                              `pen_turn` and must last `min_turn` frames.
-  * a change needs sustained evidence         `min_turn` + `pen_turn` + the cost cap.
-  * after D play restarts with a possessor    3 states only (D is always followed by H or A); a
-                                              restart spell has its own minimum `min_restart`,
-                                              and its team is the one the whole spell supports.
+                                              so the path keeps its label; short dead blips and
+                                              short opponent runs return to the team in possession.
+  * a change needs sustained evidence         the switch cost, the cost cap and `min_poss`.
+  * after D play restarts with a possessor    3 states only (D is always followed by H or A); the
+                                              restart spell is exempt from `min_poss`, and its
+                                              team is the one the whole spell supports.
   * halves decoded independently              decode() takes one half; decode_match() loops.
   * boundaries at the evidence onset          the search is offline and global: a boundary sits
                                               where the summed cost is lowest, not where a
@@ -51,6 +60,7 @@ from pathlib import Path
 import numpy as np
 
 from .canonical import A, D, H
+from .relabel import min_control
 
 DEFAULT_CFG = Path(__file__).resolve().parents[2] / "configs" / "decoder.json"
 
@@ -76,16 +86,22 @@ DEFAULTS = {
     "smooth_window": 50,          # method "smooth": centred +/- frames, mean probability
     "cost_cap": 4605,             # per-frame cost ceiling (4605 = p floor 0.01); 0 = no cap
     "dead_bias": 0,               # added to the D cost of every frame (>0 discourages D)
-    "pen_turn": 40000,            # H<->A   (milli-nats; ~14 frames of a 0.9-vs-0.05 margin)
-    "pen_stop": 20000,            # H/A -> D
-    "pen_restart": 20000,         # D -> H/A
-    "min_turn": 25,               # frames; possession entered from the other team
-    "min_restart": 12,            # frames; possession entered from D
-    "min_dead": 25,               # frames; dead-ball stretch
+    "switch_cost": 20000,         # one cost for every transition (milli-nats); None -> pen_* below
+    "pen_turn": 20000,            # H<->A      } used only when switch_cost is None
+    "pen_stop": 20000,            # H/A -> D   }
+    "pen_restart": 20000,         # D -> H/A   }
+    "hard_min_turn": 1,           # frames; hard minimum inside the search for a possession
+    "hard_min_restart": 1,        #         entered from the other team / from D, and for D
+    "hard_min_dead": 1,
+    "min_dead": 25,               # frames; shorter D runs return to the team in possession
+    "min_poss": 25,               # frames; min_control on the decoded path (controlled possession)
     "prune_len_poss": 0,          # possessions shorter than this are candidates for merging
     "prune_margin_poss": 0,       # ... merged if their mean margin (milli-nats/frame) is below
     "prune_len_dead": 0,
     "prune_margin_dead": 0,
+    "snap_radius": 0,             # frames; move a team change to the aux onset peak within +/- r
+    "snap_min_peak": 0.3,         # ... only if the peak probability reaches this
+    "snap_key": "turn_onset",     # name of the aux array used for snapping
     "off_turn": 0,                # signed frames added to each boundary of that type
     "off_stop": 0,
     "off_restart": 0,
@@ -121,6 +137,8 @@ def resolve_cfg(cfg=None) -> dict:
     unknown = (set(out) - set(DEFAULTS)) | (set(out["tags"]) - set(DEFAULTS["tags"]))
     if unknown:
         raise KeyError(f"unknown decoder config keys: {sorted(unknown)}")
+    if out["switch_cost"] is not None:
+        out["pen_turn"] = out["pen_stop"] = out["pen_restart"] = int(out["switch_cost"])
     return out
 
 
@@ -346,6 +364,56 @@ def _from_segments(segs, T) -> np.ndarray:
     return out
 
 
+def absorb_dead(labels, min_dead, forced=None) -> np.ndarray:
+    """D runs shorter than min_dead take the label of the possession before them.
+
+    "Possession stays with the last team": a dead blip inside a possession is a detection error
+    far more often than a stoppage, and the error budget of a missed short stoppage is small.
+    The first and last run of the array (cut by the half) and runs holding a forced frame stay.
+    """
+    min_dead = int(min_dead)
+    if min_dead <= 1:
+        return labels
+    segs = segments(labels)
+    locked = None
+    if forced is not None:
+        locked = np.concatenate(([0], np.cumsum(np.asarray(forced) >= 0))).tolist()
+    for i in range(1, len(segs) - 1):
+        a, b, lab = segs[i]
+        if lab == D and b - a < min_dead and not (locked is not None and locked[b] > locked[a]):
+            segs[i][2] = segs[i - 1][2]        # the previous run is H or A (never D)
+    return _from_segments(segs, len(labels))
+
+
+def snap_boundaries(labels, onset, radius, min_peak) -> np.ndarray:
+    """Move each H<->A boundary to the peak of an onset probability within +/- radius frames.
+
+    onset: float [T], e.g. the model's "team change within 3 frames" output. A boundary moves
+    only if the peak reaches min_peak, and never past its neighbouring boundaries.
+    """
+    radius = int(radius)
+    if radius <= 0 or onset is None:
+        return labels
+    onset = np.nan_to_num(np.asarray(onset, dtype=np.float64), nan=0.0)
+    T = len(labels)
+    segs = segments(labels)
+    bounds = [s for s, _, _ in segs] + [T]
+    for i in range(1, len(segs)):
+        if D in (segs[i - 1][2], segs[i][2]):
+            continue
+        b = bounds[i]
+        lo, hi = max(bounds[i - 1] + 1, b - radius), min(bounds[i + 1] - 1, b + radius)
+        if hi < lo:
+            continue
+        window = onset[lo:hi + 1]
+        peak = float(window.max())
+        if peak < min_peak:
+            continue
+        cands = np.flatnonzero(window == peak) + lo
+        bounds[i] = int(cands[np.argmin(np.abs(cands - b))])      # nearest peak, earliest on ties
+    return _from_segments([[bounds[i], bounds[i + 1], segs[i][2]] for i in range(len(segs))], T)
+
+
 def prune(labels, cost, cfg, forced=None) -> np.ndarray:
     """Merge short, weakly supported segments into a neighbour.
 
@@ -465,11 +533,13 @@ def forced_mask(seq, graded_blocks=None, dead_intervals=None, kickoff_tag=False)
     return forced
 
 
-def decode(proba, seq=None, cfg=None, forced=None) -> np.ndarray:
+def decode(proba, seq=None, cfg=None, forced=None, aux=None) -> np.ndarray:
     """P(H,A,D) float [T,3] for one half -> int8 [T] labels in {0,1,2}. See the module docstring.
 
-    seq is only used for seq.tags / seq.frame when cfg["tags"]["enabled"]; forced is int8 [T]
-    with -1 = free and any other value = the label that frame must carry.
+    seq     only used for seq.tags / seq.frame when cfg["tags"]["enabled"].
+    forced  int8 [T], -1 = free, any other value = the label that frame must carry.
+    aux     optional dict of float [T] arrays from model.predict_aux; only read when
+            cfg["snap_radius"] > 0 (key cfg["snap_key"]). The decoder works without it.
     """
     cfg = resolve_cfg(cfg)
     T = len(proba)
@@ -490,8 +560,15 @@ def decode(proba, seq=None, cfg=None, forced=None) -> np.ndarray:
             for lab in (H, A, D):
                 cost[(forced >= 0) & (forced != lab), lab] += BIG
         out, _ = segment_viterbi(cost, cfg["pen_turn"], cfg["pen_stop"], cfg["pen_restart"],
-                                 cfg["min_turn"], cfg["min_restart"], cfg["min_dead"])
+                                 cfg["hard_min_turn"], cfg["hard_min_restart"],
+                                 cfg["hard_min_dead"])
+        out = absorb_dead(out, cfg["min_dead"], forced)
+        if int(cfg["min_poss"]) > 1:
+            out = min_control(out, int(cfg["min_poss"]))
         out = prune(out, cost, cfg, forced)
+        if int(cfg["snap_radius"]) > 0 and aux is not None and cfg["snap_key"] in aux:
+            out = snap_boundaries(out, aux[cfg["snap_key"]], cfg["snap_radius"],
+                                  float(cfg["snap_min_peak"]))
         out = shift_boundaries(out, cfg["off_turn"], cfg["off_stop"], cfg["off_restart"])
     else:
         raise ValueError(f"unknown decode method {method!r}")
@@ -501,8 +578,9 @@ def decode(proba, seq=None, cfg=None, forced=None) -> np.ndarray:
     return out
 
 
-def decode_match(probas, seqs, cfg=None, forced=None) -> list:
+def decode_match(probas, seqs, cfg=None, forced=None, aux=None) -> list:
     """Decode each half on its own (no state crosses halftime)."""
     cfg = resolve_cfg(cfg)
     forced = forced or [None] * len(probas)
-    return [decode(p, s, cfg, f) for p, s, f in zip(probas, seqs, forced)]
+    aux = aux or [None] * len(probas)
+    return [decode(p, s, cfg, f, x) for p, s, f, x in zip(probas, seqs, forced, aux)]
