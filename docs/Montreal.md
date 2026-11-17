@@ -3,9 +3,10 @@
 More Than A Hack 2027, Initial Challenge. Team **Montreal**.
 Code: https://github.com/ibra049/mtah-2027 (one command regenerates the file; Section 11).
 
-> **Status.** Shipped candidate: **v4p** (Sections 7–9). The only open item is the holdout
-> score, which is not yet measured. Every number here can be traced to the documents cited
-> beside it (`docs/*.md`, `configs/`, `models/*/meta.json`).
+> **Status.** Shipped candidate: **v4p** (Sections 7–9). On the two held-out DFL matches,
+> scored once after the candidate was locked, it reaches spellF1 0.726 against 0.261 for the
+> official baseline on the same degraded input (Section 8). Every number here can be traced to
+> the documents cited beside it (`docs/*.md`, `configs/`, `models/*/meta.json`).
 
 ## 1. Approach and why
 
@@ -184,7 +185,7 @@ All selection uses external data:
   nominal and stoppage profiles, seeds 0 and 1, and the 5 matches.
 - **Adoption rule:** paired gain at least +0.01, losing on at most one of the 5 matches.
 - **Metrica** (never trained on) is a veto set.
-- **Holdout:** scored once, on the locked candidate.
+- **Holdout:** scored once, on the locked candidate (J03WQQ, J03WR9; same degraded profiles and frozen decoder): v4p select 0.7260 against 0.2613 for the official smooth50 baseline on the same halves, a gain of +0.43 and +0.50 on the two matches; macroF1 0.939 against 0.407. The holdout did not change the candidate.
 
 The organisers' baseline on the same protocol (`docs/proxy_check.md`; target = published
 full-match score):
@@ -210,7 +211,7 @@ cost 4500). select exists only for models with stoppage predictions.
 | v3 = lgb_v3 † | 0.6727 | 0.6378 | 0.6803 | ties v2 | | rejected (Section 9) | – |
 | v4 = lgb_v4 (canonical inputs) | 0.6670 | 0.6307 | 0.6781 | | 0.7134 | base of v4p | – |
 | v4q = v4 + stacker (probabilities only) | 0.6757 | 0.6399 | 0.6856 | +0.008 vs v4 (4/5), below the bar | +0.035…+0.048 vs v1q | fallback sibling | – |
-| **v4p = v4 + stacker with onset** | **0.6800** | **0.6467** | **0.6904** | +0.012 vs v4 (4/5); +0.023 / +0.022 vs v1q | 0.7318; +0.046…+0.058 vs v1q on all seven draws; stoppage_sm 0.7642 (+0.033 vs v4) | **shipped** | TODO |
+| **v4p = v4 + stacker with onset** | **0.6800** | **0.6467** | **0.6904** | +0.012 vs v4 (4/5); +0.023 / +0.022 vs v1q | 0.7318; +0.046…+0.058 vs v1q on all seven draws; stoppage_sm 0.7642 (+0.033 vs v4) | **shipped** | **0.7260** (nominal 0.7171, stoppage 0.7349; harsh 0.6910) |
 | v4s / v4sp = lgb_v4s (± stacker) | | | −0.006 vs v4 / −0.001 vs v4p | | | not adopted | – |
 
 Metrica = nominal draw unless noted.
