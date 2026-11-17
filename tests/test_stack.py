@@ -33,6 +33,18 @@ def test_features_are_finite_and_named():
     assert np.isfinite(X0).all()
 
 
+def test_probability_only_features_need_no_sequence():
+    proba, onset, seq = make()
+    X, names, sign = stack.features(proba, onset, None, use_cues=False)
+    full, full_names, _ = stack.features(proba, onset, seq)
+    assert X.shape[1] < full.shape[1] and set(names) < set(full_names)
+    assert not any(n[0] in "mb" or "ball" in n for n in names)
+    keep = [full_names.index(n) for n in names]
+    np.testing.assert_array_equal(X, full[:, keep])               # same columns, same values
+    Xs, _, _ = stack.features(proba[:, [A, H, 2]], onset, None, use_cues=False)
+    np.testing.assert_allclose(Xs, stack.swap(X, sign), atol=1e-6)
+
+
 def test_cues():
     proba, onset, seq = make()
     m, b, ts, tu = stack.cues(seq)
@@ -85,7 +97,7 @@ def test_model_stacked_wraps_a_base_model(tmp_path):
     art_dir.mkdir(parents=True)
     booster.save_model(str(art_dir / "stack.txt"))
     model_stacked.write_meta(art_dir, names, base_module="fake_base_model",
-                             base_artefact="models/base", onset_key="turn_onset")
+                             base_artefact="models/base", onset_key="turn_onset", use_cues=True)
     _fake_base(proba, onset)
     art = model_stacked.load_artefact(art_dir)
     assert art["base"]["path"].endswith("models/base")           # resolved against the repo root

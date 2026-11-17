@@ -1,7 +1,10 @@
 """Hybrid probabilities from stored predictions: dead-ball mass from one model, the split of the
 alive mass between the teams from another.
 
-    P(D) = P_D,dead      P(H) = (1 - P_D,dead) * P_H,team / (P_H,team + P_A,team)      (same for A)
+    P(D) = P_D,dead      P(H) = (1 - P_D,dead) * P_H,team / (P_H,team + P_A,team)      (A = rest)
+
+computed with mtah.model_hybrid.combine, the same function the target assembly uses, so the
+stored hybrid files are bit-identical to what the pipeline computes.
 
     PYTHONPATH=src python scripts/hybrid_oof.py --dead lgb_v1 --team lgb_v2 --name hyb_d1_t2
 
@@ -15,16 +18,18 @@ from pathlib import Path
 
 import numpy as np
 
+from mtah.model_hybrid import combine      # THE definition, shared with the target assembly
+
 EXT = Path.home() / "mtah-external"
 
 
-def hybrid(p_dead, p_team):
-    p_dead, p_team = np.asarray(p_dead, np.float64), np.asarray(p_team, np.float64)
-    alive = 1.0 - p_dead[:, 2]
-    tot = p_team[:, 0] + p_team[:, 1]
-    share_h = np.where(tot > 0, p_team[:, 0] / np.where(tot > 0, tot, 1.0), 0.5)
-    out = np.stack([alive * share_h, alive * (1.0 - share_h), p_dead[:, 2]], axis=1)
-    return (out / out.sum(axis=1, keepdims=True)).astype(np.float32)
+def gated(p_dead, p_team, gate):
+    """The team model's probabilities only where its team call (H vs A) agrees / disagrees with
+    the dead model's; the dead model's own split elsewhere. Used to see how much of a gain comes
+    from frames where the two models name different teams."""
+    same = (p_team[:, 0] >= p_team[:, 1]) == (p_dead[:, 0] >= p_dead[:, 1])
+    use = same if gate == "agree" else ~same
+    return np.where(use[:, None], p_team, p_dead)
 
 
 def main():
@@ -32,6 +37,9 @@ def main():
     ap.add_argument("--dead", required=True)
     ap.add_argument("--team", required=True)
     ap.add_argument("--name", required=True)
+    ap.add_argument("--gate", choices=("agree", "disagree"), default=None,
+                    help="diagnostic: take the team split from --team only on frames where the two "
+                         "models agree / disagree on the team")
     args = ap.parse_args()
     n = 0
     for sub in ("oof", "metrica", "holdout"):
@@ -47,7 +55,9 @@ def main():
                     p_dead = z["proba"]
                 out = EXT / "preds" / args.name / sub / folder / f.name
                 out.parent.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(out, proba=hybrid(p_dead, p_team), frame=frame)
+                if args.gate:
+                    p_team = gated(p_dead, p_team, args.gate)
+                np.savez_compressed(out, proba=combine(p_dead, p_team), frame=frame)
                 aux = root / folder / "aux" / f.name
                 if aux.exists():
                     (out.parent / "aux").mkdir(exist_ok=True)
