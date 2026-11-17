@@ -38,6 +38,32 @@ def length_shares(durations_s, limits=(1, 2, 4)) -> dict:
     return {f"share_lt{l}s": f4((d < l).mean()) if len(d) else "nan" for l in limits}
 
 
+def half_stats(codes, a, b) -> dict:
+    """Per match-half aggregates on official segments of codes[a:b] (0 H, 1 A, 2 D; X already
+    filled). Same unit as the external envelope: one dict per half."""
+    segs = pm.segments(codes, [(a, b)])
+    poss = [(e - s) / FPS for s, e, k in segs if k in pm.POSSESSION_LABELS]
+    dead = [(e - s) / FPS for s, e, k in segs if k == pm.D]
+    med = lambda d: f"{np.median(d):.2f}" if d else "nan"  # noqa: E731
+    return dict(n_possessions=len(poss),
+                mean_possession_s=f"{np.mean(poss):.2f}" if poss else "nan",
+                median_possession_s=med(poss), **length_shares(poss),
+                dead_share=f4((codes[a:b] == pm.D).mean()) if b > a else "nan",
+                n_dead=len(dead), median_dead_s=med(dead))
+
+
+def dead_run_stats(codes, a, b) -> dict:
+    """Dead runs inside a half, excluding the first and the last segment of the half (if dead):
+    count per minute of the half and shares shorter than 3 / 5 / 8 s."""
+    segs = pm.segments(codes, [(a, b)])
+    inner = segs[1:-1] if len(segs) > 2 else []
+    dead = np.array([(e - s) / FPS for s, e, k in inner if k == pm.D], dtype=float)
+    minutes = (b - a) / FPS / 60.0
+    sh = lambda l: f4((dead < l).mean()) if len(dead) else "nan"  # noqa: E731
+    return dict(n_dead_inner=len(dead), dead_per_min=f"{len(dead) / minutes:.4f}",
+                dead_lt3s=sh(3), dead_lt5s=sh(5), dead_lt8s=sh(8))
+
+
 def tag_agreement(codes, tags, phase_cfg, ball=None):
     """{category: (n_alive_frames, share agreeing)} plus per-code rows. codes: 0 H, 1 A, 2 D, 3 X.
     Frames counted once per tag (overlapping tags each count). With `ball` (bool [n], ball
@@ -97,10 +123,8 @@ def main(argv=None):
     for half, (a, b) in enumerate(runs, start=1):
         spells = pm.possession_spells(filled, [(a, b)])
         dur = [(e - s) / FPS for s, e, _ in spells]
-        say(half=half, n_possessions=len(spells),
-            mean_possession_s=f"{np.mean(dur):.2f}" if dur else "nan",
-            median_possession_s=f"{np.median(dur):.2f}" if dur else "nan",
-            **length_shares(dur))
+        say(half=half, **half_stats(filled, a, b))
+        say(half=half, **dead_run_stats(filled, a, b))
     spells = pm.possession_spells(filled, runs)
     dur = [(e - s) / FPS for s, e, _ in spells]
     say(n_possessions_total=len(spells),

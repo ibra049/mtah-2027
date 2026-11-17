@@ -47,7 +47,7 @@ output is deterministic: the same bundle and repository give the same bytes. Exp
 
 <!-- updated by the captain at each candidate, together with configs/final.json -->
 ```
-EXPECTED_SHA256  678aa2d4bae99a79b478e6275257b3cbac464d55bcdc778eabf9dea1f05c84da   configs/final.json = fallback (official smooth50 baseline)
+EXPECTED_SHA256  31839e5696ba1f6f1349abd711ba0176aa7a61be4fb8ed13f9dc32725ae1f4a1   configs/final.json = candidate v1 (lgb_v1 + frozen decoder); fallback configs/fallback_baseline.json gives 678aa2d4bae99a79b478e6275257b3cbac464d55bcdc778eabf9dea1f05c84da
 ```
 
 ## Run the tests
@@ -73,14 +73,16 @@ export PYTHONPATH=src
 #    (profiles nominal, stoppage and harsh; seeds 0 and 1)
 .venv/bin/python scripts/build_degraded_cache.py nominal stoppage harsh --seeds 0 1
 # 2. train with leave-one-match-out, write out-of-fold predictions and the all-5-match model
-#    to models/<name>/
-.venv/bin/python scripts/model_lomo.py --name <name>    # TODO: lands with the model lane merge
-# 3. decode and score with the official metric (team selection table)
-.venv/bin/python scripts/eval_external.py --pred-root <decoded labels dir>
+#    to models/<name>/   (the shipped model is models/lgb_v1)
+.venv/bin/python scripts/model_lomo.py --name <name>
+# 3. decode the out-of-fold predictions with the frozen decoder and score them with the official
+#    metric (team selection table)
+.venv/bin/python scripts/decoder_bench.py export --model <name> --cfg configs/decoder.json --name <labels>
+.venv/bin/python scripts/eval_external.py --pred-root ~/mtah-external/labels/<labels>
 ```
 
-TODO: the exact decode command for step 3 and the name of the shipped model, once the model and
-decoder lanes are merged.
+`scripts/decoder_bench.py grid --model <name>` reruns the decoder's coarse grid (minimax regret
+over the label views, centre of the plateau).
 
 ## Checks used during development
 

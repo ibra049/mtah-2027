@@ -290,9 +290,40 @@ TAG_DTYPE = np.dtype([("start", "i8"), ("end", "i8"), ("code", "U64"), ("team", 
 
 
 class Seq:
-    def __init__(self, T, tags, f0=1000):
+    def __init__(self, T, tags, f0=1000, ball=None):
         self.frame = np.arange(f0, f0 + T)
         self.tags = np.array(tags, dtype=TAG_DTYPE)
+        if ball is not None:
+            self.ball = ball
+
+
+def test_blind_turn_cost_holds_the_team_through_an_occlusion():
+    # weak opposite-team evidence while the ball is unobserved: with a higher team-change cost on
+    # blind frames the possession is held; with the ball observed the same evidence is a change
+    p = proba((150, SURE_H), (60, (0.30, 0.55, 0.15)), (150, SURE_H))
+    ball = np.zeros((360, 3), np.float32)
+    seen = Seq(360, [], ball=ball.copy())
+    ball[140:220] = np.nan
+    blind = Seq(360, [], ball=ball)
+    cfg = dict(CFG, switch_cost=12000, min_poss=19, blind_turn_pct=300)
+    assert [lab for lab, _ in runs(dec.decode(p, seen, cfg))] == [H, A, H]
+    assert runs(dec.decode(p, blind, cfg)) == [(H, 360)]
+    assert [lab for lab, _ in runs(dec.decode(p, blind, dict(cfg, blind_turn_pct=100)))] == [H, A, H]
+    assert [lab for lab, _ in runs(dec.decode(p, None, cfg))] == [H, A, H]         # no ball track
+
+
+def test_phase_prior_weight_follows_the_ball_missing_gap():
+    ball = np.zeros((400, 3), np.float32)
+    ball[100:125] = np.nan            # 1 s gap  -> half weight (ramp 2 s)
+    ball[200:300] = np.nan            # 4 s gap  -> full weight
+    seq = Seq(400, [(1000, 1400, "PROGRESSION", "H", "", "")], ball=ball)
+    tc, _ = dec.tag_costs(seq, dec.DEFAULTS["tags"], 400)
+    w = dec.DEFAULTS["tags"]["w_phase"]
+    assert tc[50, A] == 0 and tc[110, A] == w // 2 and tc[250, A] == w and tc[350, A] == 0
+    tc, _ = dec.tag_costs(seq, dict(dec.DEFAULTS["tags"], w_phase_seen=40), 400)
+    assert tc[50, A] == 40 and tc[250, A] == w
+    no_ball = Seq(400, [(1000, 1400, "PROGRESSION", "H", "", "")])
+    assert dec.tag_costs(no_ball, dec.DEFAULTS["tags"], 400)[0][50, A] == w      # no ball array: flat
 
 
 def test_tags_are_off_by_default_and_bounded():
@@ -303,38 +334,47 @@ def test_tags_are_off_by_default_and_bounded():
     on = dict(low, tags={"enabled": True})
     out = dec.decode(p, seq, on)
     assert [lab for lab, _ in runs(out)] == [H, A, H] and (out[100:400] == A).all()
+    assert runs(dec.decode(p, seq, dict(low, tags={"enabled": True, "team": False}))) == [(H, 600)]
     sure = proba((600, SURE_H))                                              # tag vs clear model
     assert runs(dec.decode(sure, seq, on)) == [(H, 600)]
-    tc = dec.tag_costs(Seq(600, [(1100, 1400, "BUILD UP", "A", "", "")] * 20), dec.DEFAULTS["tags"], 600)
+    tc, _ = dec.tag_costs(Seq(600, [(1100, 1400, "BUILD UP", "A", "", "")] * 20), dec.DEFAULTS["tags"], 600)
     assert tc.max() == dec.DEFAULTS["tags"]["cap"]
 
 
-def test_defending_phase_is_evidence_for_the_other_team_and_na_is_neutral():
+def test_phase_prior_never_touches_dead_and_ignores_defending_na_goals():
     tcfg = dec.DEFAULTS["tags"]
-    att = dec.tag_costs(Seq(300, [(1050, 1150, "Progression", "H", "", "")]), tcfg, 300)
-    assert att[60, A] > 0 and att[60, H] == 0 and att[60, D] == 0
-    dfn = dec.tag_costs(Seq(300, [(1050, 1150, "DEFENDING IN MIDDLE THIRD", "H", "", "")]), tcfg, 300)
-    assert dfn[60, H] > 0 and dfn[60, A] == 0
-    for team in ("N", "?"):
-        assert not dec.tag_costs(Seq(300, [(1050, 1150, "PROGRESSION", team, "", "")]), tcfg, 300).any()
-    assert not dec.tag_costs(Seq(300, [(1050, 1150, "GOALS", "H", "", "")]), tcfg, 300).any()
+    att, disc = dec.tag_costs(Seq(300, [(1050, 1150, "Progression", "H", "", "")]), tcfg, 300)
+    assert att[60, A] > 0 and att[60, H] == 0 and not att[:, D].any() and not disc.any()
+    for code, team in (("DEFENDING IN MIDDLE THIRD", "H"), ("DEFENSIVE TRANSITION", "A"),
+                       ("PROGRESSION", "N"), ("PROGRESSION", "?"), ("GOALS", "H"),
+                       ("PLAYERS IN THE BOX", "H")):
+        tc, disc = dec.tag_costs(Seq(300, [(1050, 1150, code, team, "", "")]), tcfg, 300)
+        assert not tc.any() and not disc.any()
+    # a dead ball and a short opposite-team possession inside a phase window both survive
+    seq = Seq(900, [(1000, 1750, "CREATING CHANCES", "H", "", "")])
+    p = proba((300, SURE_H), (150, SURE_D), (150, SURE_H), (40, SURE_A), (260, SURE_H))
+    on = dict(CFG, min_poss=19, switch_cost=4000, tags={"enabled": True})
+    assert runs(dec.decode(p, seq, on)) == [(H, 300), (D, 150), (H, 150), (A, 40), (H, 260)]
 
 
-def test_set_piece_window_favours_dead_before_and_team_after():
+def test_set_piece_start_discounts_the_restart_and_favours_the_tagged_team():
     tcfg = dec.DEFAULTS["tags"]
-    tc = dec.tag_costs(Seq(600, [(1200, 1325, "SET PIECES", "A", "Corner Kick", "")]), tcfg, 600)
-    assert tc[150, H] > 0 and tc[150, A] > 0 and tc[150, D] == 0             # before: dead
-    assert not tc[200:325].any()                                             # inside: unknown
-    assert tc[330, D] > 0 and tc[330, H] > 0 and tc[330, A] == 0             # after: alive, away
-    throw = dec.tag_costs(Seq(600, [(1200, 1325, "SET PIECES", "N", "Throw-in", "")]), tcfg, 600)
-    assert throw[330, D] > 0 and throw[330, H] == 0 and throw[330, A] == 0   # no team for N/A
+    tc, disc = dec.tag_costs(Seq(1500, [(1200, 2075, "SET PIECES", "A", "Corner Kick", "")]), tcfg, 1500)
+    assert disc[124] == 0 and disc[125] == tcfg["restart_discount"] == disc[500] and disc[501] == 0
+    assert tc[200, H] > 0 and tc[200, A] == 0 and tc[200 + 374, H] > 0 and tc[200 + 375, H] == 0
+    assert not tc[:, D].any()                                    # the window end is not an anchor
+    throw, disc = dec.tag_costs(Seq(1500, [(1200, 2075, "SET PIECES", "N", "Throw-in", "")]), tcfg, 1500)
+    assert not throw.any() and disc.any()                        # no team for N/A, discount kept
     off = dict(tcfg, restart=False)
-    assert not dec.tag_costs(Seq(600, [(1200, 1325, "SET PIECES", "A", "Corner Kick", "")]), off, 600).any()
-    # end to end: an unsure model around a tagged corner
-    seq = Seq(600, [(1200, 1325, "SET PIECES", "A", "Corner Kick", "")])
-    p = proba((200, (0.30, 0.30, 0.40)), (125, FLAT), (275, (0.37, 0.38, 0.25)))
-    out = dec.decode(p, seq, dict(CFG, tags={"enabled": True}))
-    assert out[100] == D and out[400] == A and H not in set(out.tolist())
+    tc, disc = dec.tag_costs(Seq(1500, [(1200, 2075, "SET PIECES", "A", "Corner Kick", "")]), off, 1500)
+    assert not tc.any() and not disc.any()
+    # end to end: weak restart evidence near a tagged corner becomes a restart for the tagged team
+    seq = Seq(900, [(1200, 2075, "SET PIECES", "A", "Corner Kick", "")])
+    p = proba((300, SURE_D), (600, (0.33, 0.35, 0.32)))
+    cfg = dict(CFG, switch_cost=60000, min_poss=19)
+    assert runs(dec.decode(p, seq, cfg)) == [(D, 900)]
+    out = dec.decode(p, seq, dict(cfg, tags={"enabled": True, "restart_discount": 20000}))
+    assert [lab for lab, _ in runs(out)] == [D, A]
 
 
 def test_forced_mask_helper():

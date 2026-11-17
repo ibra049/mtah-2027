@@ -1,0 +1,8 @@
+{
+  "_doc": "PREVIEW (not a candidate): lgb_v2 with v1's frozen decoder config (configs/decoder.json), kickoff rule on. For an early target readout only; the v2 candidate gets its own decoder config from decoder-7d.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {"module": "mtah.model", "artefact": "models/lgb_v2"},
+  "decoder": {"module": "mtah.decode", "cfg_path": "configs/decoder.json"}
+}

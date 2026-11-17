@@ -1,7 +1,7 @@
 # Montreal: frame-level possession from automatic tracking
 
 More Than A Hack 2027, Initial Challenge. Team **Montreal**.
-Code: TODO public repository URL. The file is regenerated with one command (see Reproduction).
+Code: https://github.com/ibra049/mtah-2027. The file is regenerated with one command (see Reproduction).
 
 > **Status of this document.** Sections marked **TODO** describe parts whose final numbers are
 > not yet measured. Nothing below is estimated or invented. The appendix describes the fallback
@@ -42,7 +42,7 @@ every component must beat (Section 8).
 | asset | use |
 |---|---|
 | tactical ATD (tracking, txt+xml) | **used**: the input of every model |
-| Smart Tagging | **used** for the kickoff rule: frames of each graded block before the start of its `Kick Off (Start)` tag are dead ball. Tag priors inside the decoder (restart windows, team phases): **TODO, adopted or dropped by the external evaluation.** |
+| Smart Tagging | **used** for the kickoff rule: frames of each graded block before the start of its `Kick Off (Start)` tag are dead ball. Tag priors inside the decoder (restart windows, team phases) are implemented but **not used** in the shipped configuration (`configs/decoder.json`: tags disabled). |
 | homography | **dropped**: only needed to connect tracking and video |
 | tactical and broadcast video | **dropped**: no vision component; nothing was checked against the video |
 | broadcast ATD | **dropped**: not synchronised with the tactical timeline |
@@ -58,7 +58,7 @@ Two facts about the Smart Tagging, from label-free aggregates of the tags:
 
 | dataset | source / licence | labelled by | amount | role |
 |---|---|---|---|---|
-| IDSSE (DFL / Sportec open data) | Bassek et al. 2025, *Scientific Data* 12:195; CC BY 4.0 (ATTRIBUTION.md) | the provider: per-frame `BallStatus` and `BallPossession` flags of the corrected tracking | 7 Bundesliga matches, 25 fps | training and development: 5 matches (J03WMX J03WN1 J03WOH J03WOY J03WPY); holdout: 2 (J03WQQ J03WR9) |
+| IDSSE (DFL / Sportec open data) | Bassek et al. 2025, *Scientific Data* 12:195, doi:10.1038/s41597-025-04505-y; data doi:10.6084/m9.figshare.28196177; CC BY 4.0 | the provider: per-frame `BallStatus` and `BallPossession` flags of the corrected tracking | 7 Bundesliga matches, 25 fps | training and development: 5 matches (J03WMX J03WN1 J03WOH J03WOY J03WPY); holdout: 2 (J03WQQ J03WR9) |
 | Metrica Sports sample data | github.com/metrica-sports/sample-data | labels derived by rule from the provider's own event chain and its published event definitions | 3 games | parser tests and a second development set in the target provider's own semantics |
 
 - **No hand labels** of any kind.
@@ -141,7 +141,10 @@ Models train on all three profiles, with per-half descriptors of the noise regim
 - **Halves** are decoded independently. `X` is written only outside the graded blocks: the scorer
   forward-fills `X`, so abstaining inside play never helps.
 
-Final values of `min_poss`, `min_dead` and the switch cost: **TODO** (from `configs/final.json`).
+Shipped values (`configs/decoder.json`):
+- `min_poss` = 19 frames (0.76 s);
+- `min_dead` = 50 frames (2 s);
+- switch cost = 3000 milli-nats per transition.
 
 ## 7. Model and decoder
 
@@ -172,7 +175,12 @@ hint.
   The final choice minimises the worst-case regret over the three label views.
 - **Determinism.** Integer costs and a fixed tie order make the output machine-independent.
 
-Shipped configuration: **TODO** (model name, decoder parameters, tag priors on or off).
+Shipped configuration (`configs/final.json` = candidate v1):
+- **Model:** `models/lgb_v1`.
+- **Decoder:** segment Viterbi with switch cost 3000, `min_poss` 19 frames, `min_dead` 50 frames and
+  cost cap 4605.
+- **Turned off:** onset gain, snapping, pruning and boundary offsets, tag priors.
+- **Kickoff rule:** on.
 
 ## 8. Evaluation protocol and results
 
@@ -197,9 +205,16 @@ The external protocol ranks the three baseline windows as the target does, and s
 selection metric lands within 0.002 of its published target score. This is why we trust it for
 selection.
 
-| candidate | selection metric | paired gain vs smooth50 | matches won | holdout |
-|---|---|---|---|---|
-| model + decoder (shipped) | **TODO** | **TODO** | **TODO** | **TODO** |
+| candidate | selection metric | label views τ = 0 / 0.5 / 1 s | harsh | paired gain | matches won | Metrica (veto set) | holdout |
+|---|---|---|---|---|---|---|---|
+| **v1 = lgb_v1 + decoder (shipped)** | **0.6469** | 0.617 / 0.639 / 0.685 | 0.6161 | +0.405 vs smooth50 | 5 / 5 | 0.6575 | **TODO** |
+| v2 = lgb_v2 + same decoder (under evaluation) | 0.6786 (nominal 0.6730, stoppage 0.6842) | | 0.6270 | +0.0317 vs v1 | 5 / 5 | 0.7110 | **TODO** |
+
+- **v2.** The second model adds control and touch events, noise-regime descriptors and training
+  on the stoppage profile. It passes the adoption rule against v1.
+- **Why v1 still ships.** Label-free checks on the target show v2 producing more and shorter dead
+  stretches than any external match. This document will name the shipped candidate once that
+  decision is made.
 
 Public 5-minute window: used only as a breakage check (alignment and label meaning, pass/fail).
 **TODO** flags of the shipped file.

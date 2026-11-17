@@ -27,17 +27,46 @@ from mtah.io_target import REPO
 from mtah.predict import Components, _repo_path
 
 CACHE = os.path.expanduser("~/mtah-external/cache_deg")
+NON_HOLDOUT = [f"{m}_{p}" for m in ("J03WMX", "J03WN1", "J03WOH", "J03WOY", "J03WPY")
+               for p in (1, 2)]
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", required=True)
-    ap.add_argument("--halves", required=True, help="comma list of <match>_<period>")
+    ap.add_argument("--halves", default=",".join(NON_HOLDOUT),
+                    help="comma list of <match>_<period> (default: the 10 non-holdout halves)")
     ap.add_argument("--profile", default="nominal")
     ap.add_argument("--seed", default="0")
     ap.add_argument("--cache", default=CACHE)
-    ap.add_argument("--ref-proba-dir", default=None)
+    ap.add_argument("--ref-proba-dir", default=None,
+                    help="stored OOF proba: <dir>/<half>.npz (proba, frame), aux in <dir>/aux/")
+    ap.add_argument("--ref-labels-dir", default=None,
+                    help="labels the decoder lane exported from that proba: <dir>/<half>.npy")
+    ap.add_argument("--no-repredict", action="store_true",
+                    help="skip re-predicting with the config's artefact (faster)")
+    ap.add_argument("--profiles", default=None,
+                    help="comma list of <profile>_<seed> (e.g. nominal_0,nominal_1,harsh_0,harsh_1);"
+                         " with --proba-root/--labels-root runs every folder in one call")
+    ap.add_argument("--proba-root", default=None, help="e.g. ~/mtah-external/preds/lgb_v1/oof")
+    ap.add_argument("--labels-root", default=None, help="e.g. ~/mtah-external/labels/v1")
     args = ap.parse_args(argv)
+    if args.profiles:
+        rc = 0
+        for ps in args.profiles.split(","):
+            profile, seed = ps.rsplit("_", 1)
+            sub = ["--config", args.config, "--halves", args.halves, "--profile", profile,
+                   "--seed", seed, "--cache", args.cache]
+            if args.proba_root:
+                sub += ["--ref-proba-dir", os.path.join(os.path.expanduser(args.proba_root), ps)]
+            if args.labels_root:
+                sub += ["--ref-labels-dir", os.path.join(os.path.expanduser(args.labels_root), ps)]
+            if args.no_repredict:
+                sub.append("--no-repredict")
+            print(f"== {ps}", flush=True)
+            rc |= main(sub)
+        print(f"domain_check_all all_ok={int(rc == 0)}")
+        return rc
     with open(_repo_path(args.config) if not os.path.exists(args.config) else args.config) as fh:
         config = json.load(fh)
     with open(os.path.join(REPO, "configs", "labels.json")) as fh:
@@ -47,30 +76,55 @@ def main(argv=None):
     all_ok = True
     for half in args.halves.split(","):
         seq = Sequence.load(os.path.join(args.cache, args.profile, str(args.seed), half + ".npz"))
-        lab, st = comp.predict_sequence(seq, None)
-        row = dict(half=half, T=len(seq), **st)
-        if lab is None:
-            all_ok = False
-            print(" ".join(f"{k}={v}" for k, v in row.items()))
-            continue
+        free = np.full(len(seq), -1, np.int8)
+        row = dict(half=half, T=len(seq))
+        y = np.asarray(seq.y)
+
+        def f1s(lab, tag):
+            if (y >= 0).any():
+                for tau in taus:
+                    yt = relabel.min_control(y, round(tau * 25))
+                    row[f"{tag}_spellF1_tau{tau:g}"] = f"{evaluate.spell_f1(lab, yt):.4f}"
+
+        ours_p = None
+        if not args.no_repredict:
+            # the config's artefact through the exact target path (all-5 model: IN-SAMPLE here)
+            lab, st = comp.predict_sequence(seq, None)
+            row.update({k: v for k, v in st.items() if k != "forced_frames"})
+            if lab is None:
+                all_ok = False
+                print(" ".join(f"{k}={v}" for k, v in row.items()), flush=True)
+                continue
+            all_ok &= bool(st["decoded_valid"])
+            ours_p, _ = comp.proba_aux(seq)
+            f1s(lab, "insample")
         if args.ref_proba_dir:
-            z = np.load(os.path.join(os.path.expanduser(args.ref_proba_dir), half + ".npz"))
+            d = os.path.expanduser(args.ref_proba_dir)
+            z = np.load(os.path.join(d, half + ".npz"))
             ref = z["proba"].astype(np.float32)
             same_frames = "frame" not in z.files or np.array_equal(z["frame"], seq.frame)
-            ours, _ = comp.proba_aux(seq)
             row["frames_match"] = int(same_frames)
-            row["proba_max_abs_diff"] = f"{float(np.abs(ours - ref).max()):.2e}" \
-                if ours.shape == ref.shape else "shape_mismatch"
-            ref_lab = comp.decode(ref, seq, np.full(len(seq), -1, np.int8))
-            n_diff = int((ref_lab != lab).sum()) if ref_lab.shape == lab.shape else -1
-            row["n_label_diff_vs_ref"] = n_diff
-            all_ok &= bool(same_frames and n_diff == 0)
-        y = np.asarray(seq.y)
-        if (y >= 0).any():
-            for tau in taus:
-                yt = relabel.min_control(y, round(tau * 25))
-                row[f"spellF1_tau{tau:g}"] = f"{evaluate.spell_f1(lab, yt):.4f}"
-        all_ok &= bool(st["decoded_valid"])
+            if ours_p is not None:
+                row["proba_max_abs_diff_info"] = f"{float(np.abs(ours_p - ref).max()):.2e}" \
+                    if ours_p.shape == ref.shape else "shape_mismatch"
+            aux = None
+            ap_ = os.path.join(d, "aux", half + ".npz")
+            if comp.use_aux and os.path.isfile(ap_):
+                za = np.load(ap_)
+                aux = {k: za[k] for k in za.files if k != "frame"}
+            oof_lab = comp.decode(ref, seq, free, aux)      # same decoder + config, stored proba
+            f1s(oof_lab, "oof")
+            all_ok &= bool(same_frames)
+            if args.ref_labels_dir:
+                rp = os.path.join(os.path.expanduser(args.ref_labels_dir), half + ".npy")
+                if os.path.isfile(rp):
+                    exported = np.load(rp)
+                    n = int((exported != oof_lab).sum()) if exported.shape == oof_lab.shape else -1
+                    row["n_label_diff_vs_exported"] = n
+                    all_ok &= n == 0
+                else:
+                    row["exported_labels"] = "missing"
+                    all_ok = False
         print(" ".join(f"{k}={v}" for k, v in row.items()), flush=True)
     print(f"domain_check all_ok={int(all_ok)}")
     return 0 if all_ok else 1

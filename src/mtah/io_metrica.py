@@ -216,3 +216,98 @@ def cache_path(game, period):
 def load(game):
     """Cached canonical Sequences (written by scripts/metrica_labels.py --save)."""
     return [Sequence.load(cache_path(game, p)) for p in (1, 2)]
+
+
+# ------------------------------------------------------------------ player slots (event alignment)
+def player_slots(game, root=ROOT):
+    """{event player key: (side 'home'/'away', slot)} matching load_tracking's slot order.
+    Games 1/2: key = CSV column name ('Player11'); game 3: key = player id ('P3578')."""
+    d = root / f"Sample_Game_{game}"
+    out = {}
+    if game in (1, 2):
+        for side, fn in (("home", "Home_Team"), ("away", "Away_Team")):
+            cols = pd.read_csv(d / f"Sample_Game_{game}_RawTrackingData_{fn}.csv", skiprows=2, nrows=1).columns
+            for k, c in enumerate([c for c in cols if str(c).startswith("Player")]):
+                out[str(c)] = (side, k)
+        return out
+    meta = _epts_meta(root)
+    ps = {p for _, _, pl in meta["specs"] for p in pl}
+    home = sorted(p for p in ps if meta["team_of"][p] == meta["home_id"])
+    away = sorted(p for p in ps if meta["team_of"][p] != meta["home_id"])
+    return {p: ("home", k) for k, p in enumerate(home)} | {p: ("away", k) for k, p in enumerate(away)}
+
+
+def load_events_with_player(game, root=ROOT):
+    """load_events plus a 'player' column (key into player_slots)."""
+    ev = load_events(game, root)
+    d = root / f"Sample_Game_{game}"
+    if game in (1, 2):
+        raw = pd.read_csv(d / f"Sample_Game_{game}_RawEventsData.csv")
+        ev["player"] = raw["From"].fillna("").astype(str).str.replace(" ", "").values
+    else:
+        js = json.load(open(d / f"Sample_Game_{game}_events.json"))["data"]
+        ev["player"] = [(e.get("from") or {}).get("id") or "" for e in js]
+    return ev
+
+
+# ------------------------------------------------------------------ touch events (same format as DFL)
+KIND = {"PASS": "pass", "SHOT": "shot", "CARRY": "carry", "BALL LOST": "other_touch",
+        "CHALLENGE": "duel", "BALL OUT": "other_touch"}
+
+
+def _kind(t, sub):
+    if t == "SET PIECE":
+        for key, k in (("KICK OFF", "setpiece_kickoff"), ("THROW IN", "setpiece_throwin"),
+                       ("CORNER", "setpiece_corner"), ("PENALTY", "setpiece_penalty")):
+            if key in sub:
+                return k
+        return "setpiece_freekick"
+    if t == "PASS" and "GOAL KICK" in sub:
+        return "setpiece_goalkick"
+    if t == "PASS" and "CROSS" in sub:
+        return "cross"
+    if t == "RECOVERY":
+        return "duel" if "THEFT" in sub else "claim"
+    return KIND.get(t)
+
+
+def build_events(game, near_m=1.5, half_w=25):
+    """Provider events aligned to the ball track like DFL's (io_idsse_events.EVENT_DTYPE):
+    touch frame = max ball velocity change while the event's player is within near_m of the ball,
+    within +-half_w frames of the annotated start frame. CHALLENGE rows keep only the WON side
+    (team = winner). -> {period: structured array}."""
+    from .io_idsse_events import EVENT_DTYPE, kick_score
+    from .canonical import A, H
+    seqs = {s.period: s for s in load(game)}
+    ev = load_events_with_player(game)
+    slots = player_slots(game)
+    out = {}
+    for p, s in seqs.items():
+        k = kick_score(s.ball[:, :2])
+        f0 = int(s.frame[0])
+        rows = []
+        for _, r in ev[ev["period"] == p].iterrows():
+            kind = _kind(r["type"], r["subtype"])
+            if kind is None or (r["type"] == "CHALLENGE" and "WON" not in r["subtype"]):
+                continue
+            i = int(r["start"]) - f0
+            if not 0 <= i < len(s):
+                continue
+            team = H if r["team"] == "H" else A
+            dist, ok, a = np.nan, 0, i
+            if r["player"] in slots:
+                side, j = slots[r["player"]]
+                pl = (s.home if side == "home" else s.away)[:, j]
+                lo, hi = max(0, i - half_w), min(len(s), i + half_w + 1)
+                d = np.linalg.norm(pl[lo:hi] - s.ball[lo:hi, :2], axis=1)
+                near = d < near_m
+                if near.any():
+                    a = lo + int(np.argmax(np.where(near, k[lo:hi], -1)))
+                    dist, ok = float(d[a - lo]), 1
+                elif not np.all(np.isnan(d)):
+                    a = lo + int(np.nanargmin(d)); dist = float(d[a - lo])
+            rows.append((int(s.frame[a]), int(r["start"]), (int(r["start"]) - f0) / 25.0, team, kind,
+                         str(r["player"])[:16], -1, dist, ok))
+        rows.sort(key=lambda x: x[0])
+        out[p] = np.array(rows, dtype=EVENT_DTYPE)
+    return out

@@ -1,0 +1,8 @@
+{
+  "_doc": "Candidate v1: lgb_v1 frame model + decoder at decoder-7d's frozen plateau config, kickoff rule on. use_aux: predict_both (one feature pass) and pass aux={'turn_onset': ...} to decode(); it only matters if configs/decoder.json enables onset_gain/snap with snap_key 'turn_onset'.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {"module": "mtah.model", "artefact": "models/lgb_v1"},
+  "decoder": {"module": "mtah.decode", "cfg_path": "configs/decoder.json"}
+}

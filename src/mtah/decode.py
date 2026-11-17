@@ -76,12 +76,11 @@ _LUT = np.array([0] + [int(round(-COST_SCALE * math.log(k / P_QUANT)))
                        for k in range(1, P_QUANT + 1)], dtype=np.int64)
 _LUT[0] = _LUT[1]
 
-# Smart Tagging codes (DATA.md table), matched case-insensitively.
+# Smart Tagging codes (DATA.md table), matched case-insensitively. Only the attacking phase codes
+# carry a team prior; the defending codes mirror them and PLAYERS IN THE BOX / GOALS are not phases
+# of one team's possession.
 ATTACK_CODES = frozenset({"build up", "progression", "creating chances", "ball in final third",
-                          "ball in the box", "players in the box", "long ball",
-                          "attacking transition"})
-DEFEND_CODES = frozenset({"defending in defensive third", "defending in middle third",
-                          "defending in attacking third", "defensive transition"})
+                          "ball in the box", "long ball", "attacking transition"})
 SET_PIECE_CODE = "set pieces"
 
 DEFAULTS = {
@@ -89,38 +88,42 @@ DEFAULTS = {
     "smooth_window": 50,          # method "smooth": centred +/- frames, mean probability
     "cost_cap": 4605,             # per-frame cost ceiling (4605 = p floor 0.01); 0 = no cap
     "dead_bias": 0,               # added to the D cost of every frame (>0 discourages D)
-    "switch_cost": 20000,         # one cost for every transition (milli-nats); None -> pen_* below
-    "pen_turn": 20000,            # H<->A      } used only when switch_cost is None
-    "pen_stop": 20000,            # H/A -> D   }
-    "pen_restart": 20000,         # D -> H/A   }
+    "switch_cost": 3000,          # one cost for every transition (milli-nats); None -> pen_* below
+    "pen_turn": 3000,             # H<->A      } used only when switch_cost is None
+    "pen_stop": 3000,             # H/A -> D   }
+    "pen_restart": 3000,          # D -> H/A   }
     "hard_min_turn": 1,           # frames; hard minimum inside the search for a possession
     "hard_min_restart": 1,        #         entered from the other team / from D, and for D
     "hard_min_dead": 1,
-    "min_dead": 25,               # frames; shorter D runs return to the team in possession
-    "min_poss": 25,               # frames; min_control on the decoded path (controlled possession)
+    "min_dead": 50,               # frames; shorter D runs return to the team in possession
+    "min_poss": 19,               # frames; min_control on the decoded path (controlled possession)
     "prune_len_poss": 0,          # possessions shorter than this are candidates for merging
     "prune_margin_poss": 0,       # ... merged if their mean margin (milli-nats/frame) is below
     "prune_len_dead": 0,
     "prune_margin_dead": 0,
+    "blind_turn_pct": 100,        # percent of the team-change cost on frames without a ball
+                                  #   observation (needs seq.ball); 100 = no change
     "onset_gain": 0,              # percent; >0 makes a team change cheaper where aux[snap_key] fires
     "onset_ref": 0.02,            # onset level at which a team change costs exactly pen_turn
     "snap_radius": 0,             # frames; move a team change to the aux onset peak within +/- r
     "snap_min_peak": 0.3,         # ... only if the peak probability reaches this
-    "snap_key": "team_change",    # name of the aux array used for snapping
+    "snap_key": "turn_onset",     # aux array with the team-change onset probability
     "off_turn": 0,                # signed frames added to each boundary of that type
     "off_stop": 0,
     "off_restart": 0,
     "tags": {
         "enabled": False,         # master switch
-        "restart": True,          # structural: set-piece windows
-        "team": True,             # bounded team prior from phases
-        "restart_pre_s": 3.0,     # seconds before the window that favour D
-        "restart_post_s": 3.0,    # seconds after the window that favour alive (+ tagged team)
-        "w_restart_dead": 300,    # milli-nats/frame added to H and A before the window
-        "w_restart_alive": 300,   # ... added to D after the window
-        "w_restart_team": 150,    # ... added to the other team after the window (team known)
-        "w_phase": 100,           # ... added to the disfavoured team inside a phase
-        "cap": 400,               # ceiling of the summed tag cost per frame and state
+        "restart": True,          # structural: restart expected near a set-piece tag start
+        "team": True,             # bounded team prior from attacking phases
+        "restart_from_s": -3.0,   # window around the set-piece tag START in which a
+        "restart_to_s": 12.0,     #   D -> alive transition is discounted
+        "restart_discount": 3000, # milli-nats taken off the restart cost there (floor 0)
+        "restart_team_s": 15.0,   # seconds from the tag start that favour the tagged team
+        "w_restart_team": 100,    # milli-nats/frame on the other team
+        "w_phase": 100,           # milli-nats/frame on the other team inside an attacking phase,
+        "w_phase_seen": 0,        #   reached when the ball-missing gap is phase_ramp_s long;
+        "phase_ramp_s": 2.0,      #   w_phase_seen applies while the ball is observed
+        "cap": 200,               # ceiling of the summed tag cost per frame and state
     },
 }
 
@@ -170,31 +173,53 @@ def frame_costs(proba, cfg) -> np.ndarray:
     return cost
 
 
-def tag_costs(seq, tcfg, T, fps=25) -> np.ndarray:
-    """int64 [T,3] bounded additive costs from Smart Tagging intervals (seq.tags).
+def tag_costs(seq, tcfg, T, fps=25):
+    """(state cost int64 [T,3], restart discount int64 [T]) from Smart Tagging (seq.tags).
 
-    Tags are automatic and their intervals are phases, not possessions (DATA.md), so each rule
-    only adds a small per-frame cost to the state it speaks against, and the sum is capped:
-      * SET PIECES window [start, end): the restart happens inside it. The `restart_pre_s`
-        seconds before it favour D; the `restart_post_s` seconds after it favour alive, and the
-        tagged team if there is one (throw-ins are N/A -> no team).
-      * attacking phase of team T: cost on the other team inside the interval.
-      * defending phase of team T (the tag names the DEFENDING side): cost on T.
-      * team N/A or unknown, GOALS, and any other code: neutral.
+    Design facts (label-free aggregates of the target's tag file, see docs/decoder.md): tags are
+    automatic; a set-piece window has a fixed length, so only its START is an anchor; phase
+    windows are 12-30 s long and run on across turnovers and stoppages; defending codes mirror
+    the attacking ones (same window, other team) and add nothing. Hence every rule is a bounded
+    nudge, never a constraint:
+      * SET PIECES (structural, switch `restart`): a restart is expected near the tag start, so a
+        D -> alive transition inside [start + restart_from_s, start + restart_to_s] costs
+        `restart_discount` less. If the tag names a team, the other team costs `w_restart_team`
+        per frame for `restart_team_s` seconds from the tag start (throw-ins are N/A: no team).
+      * attacking phase of team T (switch `team`): the other team costs up to `w_phase` per
+        frame inside the window. The weight grows with the length of the ball-missing gap the
+        frame sits in (0 -> `w_phase_seen` with the ball observed, full `w_phase` once the gap
+        reaches `phase_ramp_s`): the prior speaks where the model is blind and stays quiet where
+        it can see. D is never penalised, so a stoppage inside a phase is untouched, and the
+        per-frame sum over overlapping tags is capped at `cap`, so a short opposite-team
+        possession with ordinary model support survives.
+      * defending codes, GOALS, team N/A or unknown: ignored.
     """
     cost = np.zeros((T, 3), dtype=np.int64)
+    discount = np.zeros(T, dtype=np.int64)
     tags = getattr(seq, "tags", None)
     if tags is None or len(tags) == 0:
-        return cost
+        return cost, discount
     f0 = int(seq.frame[0])
     names = tags.dtype.names
-    pre = int(round(float(tcfg["restart_pre_s"]) * fps))
-    post = int(round(float(tcfg["restart_post_s"]) * fps))
+    r_from = int(round(float(tcfg["restart_from_s"]) * fps))
+    r_to = int(round(float(tcfg["restart_to_s"]) * fps))
+    r_team = int(round(float(tcfg["restart_team_s"]) * fps))
 
-    def add(a, b, state, w):
-        a, b = max(0, a), min(T, b)
-        if b > a and w:
-            cost[a:b, state] += int(w)
+    def span(a, b):
+        return max(0, a), min(T, b)
+
+    # per-frame weight of the phase prior, from the length of the ball-missing gap around t
+    w_full, w_seen = int(tcfg["w_phase"]), int(tcfg["w_phase_seen"])
+    ramp = max(1, int(round(float(tcfg["phase_ramp_s"]) * fps)))
+    ball = getattr(seq, "ball", None)
+    if ball is None:
+        w_phase = np.full(T, w_full, dtype=np.int64)
+    else:
+        gap = np.zeros(T, dtype=np.int64)
+        for a, b, lab in segments(np.isnan(np.asarray(ball)[:T, 0]).astype(np.int8)):
+            if lab:
+                gap[a:b] = b - a
+        w_phase = w_seen + ((w_full - w_seen) * np.minimum(gap, ramp)) // ramp
 
     for row in tags:
         code = str(row["code"]).strip().lower()
@@ -203,23 +228,21 @@ def tag_costs(seq, tcfg, T, fps=25) -> np.ndarray:
         if code == SET_PIECE_CODE:
             if not tcfg["restart"]:
                 continue
-            add(a - pre, a, H, tcfg["w_restart_dead"])
-            add(a - pre, a, A, tcfg["w_restart_dead"])
-            add(b, b + post, D, tcfg["w_restart_alive"])
-            if team == "H":
-                add(b, b + post, A, tcfg["w_restart_team"])
-            elif team == "A":
-                add(b, b + post, H, tcfg["w_restart_team"])
-        elif tcfg["team"] and team in ("H", "A"):
-            mine, other = (H, A) if team == "H" else (A, H)
-            if code in ATTACK_CODES:
-                add(a, b, other, tcfg["w_phase"])
-            elif code in DEFEND_CODES:
-                add(a, b, mine, tcfg["w_phase"])
+            lo, hi = span(a + r_from, a + r_to + 1)
+            if hi > lo:
+                discount[lo:hi] = int(tcfg["restart_discount"])
+            if team in ("H", "A"):
+                lo, hi = span(a, a + r_team)
+                if hi > lo:
+                    cost[lo:hi, A if team == "H" else H] += int(tcfg["w_restart_team"])
+        elif tcfg["team"] and team in ("H", "A") and code in ATTACK_CODES:
+            lo, hi = span(a, b)
+            if hi > lo:
+                cost[lo:hi, A if team == "H" else H] += w_phase[lo:hi]
     cap = int(tcfg["cap"])
     if cap > 0:
         np.minimum(cost, cap, out=cost)
-    return cost
+    return cost, discount
 
 
 # ------------------------------------------------------------------------- segment Viterbi
@@ -573,7 +596,7 @@ def forced_mask(seq, graded_blocks=None, dead_intervals=None, kickoff_tag=False)
 def decode(proba, seq=None, cfg=None, forced=None, aux=None) -> np.ndarray:
     """P(H,A,D) float [T,3] for one half -> int8 [T] labels in {0,1,2}. See the module docstring.
 
-    seq     only used for seq.tags / seq.frame when cfg["tags"]["enabled"].
+    seq     only used when cfg["tags"]["enabled"]: seq.tags, seq.frame and (if present) seq.ball.
     forced  int8 [T], -1 = free, any other value = the label that frame must carry.
     aux     optional dict of float [T] arrays from model.predict_aux; aux[cfg["snap_key"]] (the
             team-change onset probability) is read only when cfg["onset_gain"] > 0 or
@@ -592,16 +615,27 @@ def decode(proba, seq=None, cfg=None, forced=None, aux=None) -> np.ndarray:
         out = smooth_decode(proba, int(cfg["smooth_window"]))
     elif method == "segment":
         cost = frame_costs(proba, cfg)
+        pen_restart = cfg["pen_restart"]
         if cfg["tags"]["enabled"] and seq is not None:
-            cost += tag_costs(seq, cfg["tags"], T)
+            tag_cost, discount = tag_costs(seq, cfg["tags"], T)
+            cost += tag_cost
+            if discount.any():
+                pen_restart = np.maximum(0, int(pen_restart) - discount)
         if forced is not None:
             for lab in (H, A, D):
                 cost[(forced >= 0) & (forced != lab), lab] += BIG
-        onset = aux.get(cfg["snap_key"]) if aux is not None else None
+        onset = None
+        if aux is not None:              # accept the earlier export name as well
+            onset = aux.get(cfg["snap_key"], aux.get("team_change"))
         pen_turn = cfg["pen_turn"]
         if int(cfg["onset_gain"]) > 0 and onset is not None:
             pen_turn = onset_turn_cost(onset, pen_turn, cfg["onset_gain"], cfg["onset_ref"])
-        out, _ = segment_viterbi(cost, pen_turn, cfg["pen_stop"], cfg["pen_restart"],
+        ball = getattr(seq, "ball", None) if seq is not None else None
+        if int(cfg["blind_turn_pct"]) != 100 and ball is not None:
+            blind = np.isnan(np.asarray(ball)[:T, 0])
+            pen_turn = (np.broadcast_to(np.asarray(pen_turn, dtype=np.int64), (T,))
+                        * np.where(blind, int(cfg["blind_turn_pct"]), 100)) // 100
+        out, _ = segment_viterbi(cost, pen_turn, cfg["pen_stop"], pen_restart,
                                  cfg["hard_min_turn"], cfg["hard_min_restart"],
                                  cfg["hard_min_dead"])
         out = absorb_dead(out, cfg["min_dead"], forced)

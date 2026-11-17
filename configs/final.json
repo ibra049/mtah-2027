@@ -1,5 +1,14 @@
 {
-  "_doc": "THE submission config (README: single regeneration command). Currently the fallback (official nearest-player + smooth50 baseline). The captain replaces it with the locked candidate and updates the EXPECTED_SHA256 line in README.md in the same commit.",
-  "method": "baseline",
-  "window": 50
+  "_doc": "THE submission config (README: single regeneration command). Candidate v1: lgb_v1 frame model + frozen decoder (configs/decoder.json), kickoff rule on. Replaces the fallback (configs/fallback_baseline.json, official smooth50). The captain updates this file and the EXPECTED_SHA256 line in README.md in the same commit.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {
+    "module": "mtah.model",
+    "artefact": "models/lgb_v1"
+  },
+  "decoder": {
+    "module": "mtah.decode",
+    "cfg_path": "configs/decoder.json"
+  }
 }
