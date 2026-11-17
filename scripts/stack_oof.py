@@ -92,6 +92,9 @@ def main():
                     help="skip the leave-one-match-out pass (its files already exist) and fit only "
                          "the all-match stacker for --metrica / --holdout / --save")
     ap.add_argument("--metrica", action="store_true")
+    ap.add_argument("--metrica-onset-scale", type=float, default=None,
+                    help="sensitivity test: multiply the onset input by this factor when writing "
+                         "the Metrica predictions (use a separate --name)")
     ap.add_argument("--holdout", action="store_true",
                     help="also write stacked predictions for the holdout matches (never scored here)")
     ap.add_argument("--save", default=None)
@@ -136,6 +139,8 @@ def main():
                     if got is None:
                         continue
                     proba, onset, frame, seq = got
+                    if sub == "metrica" and args.metrica_onset_scale is not None and onset is not None:
+                        onset = onset * args.metrica_onset_scale
                     X, _, _ = stack.features(proba, onset, seq, use_cues, use_onset)
                     out = EXT / "preds" / args.name / sub / folder / f"{mid}_{p}.npz"
                     out.parent.mkdir(parents=True, exist_ok=True)
