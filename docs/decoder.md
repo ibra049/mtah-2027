@@ -134,13 +134,29 @@ and 0.003 on harsh. The surface is flat: every configuration inside the plateau 
 | dead-ball bias ±300 | −0.001 | 2/5 |
 | hard minimum durations inside the search instead of steps 4-5 | −0.003 | 0/5 |
 | pruning of short low-margin possessions | −0.008 | 1/5 |
-| Smart Tagging priors on simulated tags (restart, team, both; nominal and harsh tag noise) | −0.001 … +0.000 | 1–4/5 |
+| Smart Tagging priors on simulated tags (restart, team, both; nominal and harsh tag noise; measured with `lgb_v2`) | −0.001 … +0.000 | 1–4/5 |
 
 Tag priors were also tried with clean simulated tags and with four times the weight; the gain
 stayed within ±0.002 and stronger weights lost. The reason is visible in the error analysis: the
 restart a set-piece tag announces is already found (about 90% of stops and restarts are matched
 within one second), and a phase tag agrees with the true owner on about two frames in three,
 which is less than the model already knows. The submission is therefore decoded without tags.
+
+### Model `lgb_v2` (adds the stoppage profile; select = mean of nominal and stoppage)
+
+| decoder | nominal | stoppage | select | harsh | Metrica nominal | Metrica harsh |
+|---|---|---|---|---|---|---|
+| official baseline (smooth50) | 0.2165 | 0.2665 | 0.2415 | 0.1781 | 0.268 | |
+| `configs/decoder.json` (switch cost 3000) | 0.6730 | 0.6842 | 0.6786 | 0.6270 | 0.7110 | 0.6592 |
+| `configs/decoder_v2.json` (switch cost 4500) | 0.6739 | 0.6855 | 0.6797 | 0.6307 | 0.7102 | 0.6648 |
+
+The grid was rerun on `lgb_v2` over nominal and stoppage together (75 configurations). The
+minimax-regret configuration is again 3000 / 19 / 50; the minimum dead stretch does not move
+under the stoppage profile (plateau 50–75 frames). Only the switch-cost plateau shifts, to
+3000–6000 (4500–9000 on harsh), because the v2 team probabilities flip faster; 4500 is its centre.
+The difference between the two files is inside the noise (+0.001 select, +0.004 harsh) and was
+made for centrality, not for score. The onset options were retested on v2's onset output and
+stayed below the bar (−0.001 … +0.004).
 
 ### Where the remaining loss is (view 0.5 s, `lgb_v1`)
 
