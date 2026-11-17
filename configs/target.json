@@ -1,0 +1,27 @@
+{
+  "_doc": "Target-recording settings. n_frames, fps, pitch and graded_blocks are NOT here: they are read from third_party/mtah_challenge/games.py by mtah.io_target.load_config. 'documented' holds published aggregates (DATA.md) used ONLY by mtah.check_target as parse assertions.",
+  "game": "BAR-ATH",
+  "stem": "BAR-ATH_tactical",
+  "home_name_contains": "barcelona",
+  "tag_team_map": {
+    "barcelona": "H",
+    "atletic club": "A",
+    "athletic club": "A",
+    "n/a": "N"
+  },
+  "documented": {
+    "n_ball_present_all": 113488,
+    "n_ball_present_graded": 94214,
+    "n_graded": 158857,
+    "n_tags": 638,
+    "n_tags_H": 314,
+    "n_tags_A": 288,
+    "n_tags_N": 36,
+    "n_slots": 46,
+    "published_kickoff_frames": {
+      "1": 11185,
+      "2": 113742
+    }
+  },
+  "team_name": "Montreal"
+}
