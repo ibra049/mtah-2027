@@ -1,0 +1,21 @@
+{
+  "_doc": "Decoder parameters for model lgb_v2 (mtah.decode). Same procedure as configs/decoder.json, rerun on lgb_v2 out-of-fold probabilities over the nominal and stoppage profiles together (5 non-holdout DFL matches, seeds 0+1, label views 0 / 0.5 / 1.0 s): minimax regret, then the centre of the plateau. Only switch_cost differs from configs/decoder.json. Nothing here was fitted to the target or its ground truth. Costs in milli-nats, durations in frames at 25 fps.",
+  "method": "segment",
+  "cost_cap": 4605,
+  "dead_bias": 0,
+  "_switch_cost": "Plateau 3000-6000 on nominal+stoppage (0.6786 / 0.6797 / 0.6794 at 3000 / 4500 / 6000; 2000 -> 0.6772, 9000 -> 0.6749) and 4500-9000 on harsh. 4500 is the centre of both. Against 3000 the paired gain is +0.001 (nominal, stoppage), +0.004 (harsh, 5/5 matches), -0.001 / +0.006 on the Metrica games (nominal / harsh): inside the noise, chosen for centrality, not for score.",
+  "switch_cost": 4500,
+  "_min_poss": "Plateau 12-19 frames at this switch cost (25 -> -0.003).",
+  "min_poss": 19,
+  "_min_dead": "Plateau 50-75 frames (25 -> -0.001); unchanged under the stoppage profile.",
+  "min_dead": 50,
+  "off_turn": 0,
+  "off_stop": 0,
+  "off_restart": 0,
+  "_options_off": "Retested on lgb_v2 with the paired rule and not adopted: onset-aware switch cost (-0.000 nominal, +0.002 stoppage), snap to onset peak (-0.001), both with switch cost 6000 (+0.000 nominal, +0.004 stoppage), Smart Tagging priors on simulated tags (within +/-0.001; stronger weights lose 0.002).",
+  "onset_gain": 0,
+  "snap_radius": 0,
+  "prune_len_poss": 0,
+  "prune_len_dead": 0,
+  "tags": {"enabled": false}
+}
