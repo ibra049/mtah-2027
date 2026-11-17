@@ -1,4 +1,4 @@
-"""Entry point: python -m mtah.predict --data-dir $MTAH_DATA --config configs/X.json --out PATH
+"""Entry point: python -m mtah.predict --config configs/X.json [--data-dir DIR] [--out PATH]
 
 Run against the target only through scripts/run_target.sh. Prints only SAFE| status lines.
 Methods (config "method"):
@@ -33,8 +33,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     ap.add_argument("--config", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", default=None,
+                    help="default: <data-dir>/out/<team_name>.csv (configs/target.json)")
     args = ap.parse_args(argv)
+    if args.out is None:
+        from mtah.io_target import load_config
+        args.out = os.path.join(args.data_dir, "out", load_config()["team_name"] + ".csv")
     with open(args.config) as fh:
         config = json.load(fh)
     t0 = time.time()

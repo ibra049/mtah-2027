@@ -16,3 +16,10 @@ Lane EXTERNAL-DATA + EVAL. Work in a git worktree on branch lane/external from ~
 4. `src/mtah/evaluate.py`: spellF1/macroF1/transition metrics on external sequences by calling the official functions (import from vendor/challenge/evaluation). A CLI that evaluates a predictions directory for the dev or holdout split and prints a per-match table.
 5. External baseline numbers: run the nearest-player + smooth50 baseline on dev, both clean and degraded, so every later lane has a reference point.
 Report commit IDs and the stats tables to the captain.
+
+OVERNIGHT RULES (Ibrahim asleep until ~08:00 EST):
+- Never wait on him. Put questions in ~/Desktop/mtah-2027/coord/QUESTIONS.md with the default you assumed, then continue.
+- After each milestone, append one line to ~/Desktop/mtah-2027/coord/STATUS.md.
+- The captain is the Claude session running in ~/Desktop/mtah-2027 (named mtah-2027-*; use ListAgents). Message it first with your lane name, then report commit IDs and results via SendMessage. When your work order is done, ask it for the next task instead of stopping.
+- Avoid actions that need permission approval (git push, new installs); they hang overnight. Local commits are fine.
+- RESTART NOTE: an earlier session may have started this lane from the wrong folder. Check `git status`, `git log`, and ~/mtah-external/cache first, and continue from whatever exists.

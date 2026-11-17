@@ -1,0 +1,41 @@
+{
+  "_doc": "Degradation of clean DFL tracking toward Metrica automatic tracking. Each value is either a published fact (DATA.md/CHALLENGE.md) or a stated assumption; nothing is fitted to the target data or GT.",
+  "seed": 20271117,
+
+  "_ball_missing_frac": "FACT DATA.md: ball present on 59.3% of graded frames (94,214/158,857) -> 0.407 missing. Base hazard is solved per sequence by bisection to hit it.",
+  "ball_missing_frac": 0.407,
+  "_ball_gap_mean_s": "ASSUMPTION: DATA.md says missing 'in bursts' due to occlusions, crowded boxes, balls in the air; no length published. 1.5 s ~ duration of a duel/aerial ball.",
+  "ball_gap_mean_s": 1.5,
+  "_ball_bias": "FACT (qualitative) DATA.md: 'occlusions, crowded boxes and balls in the air all lose it ... disproportionately on the frames that matter'. ASSUMED strengths: hazard x1.35 per player within 3 m (cap 6 -> x6), x4 if z>2 m, x2 if speed>20 m/s.",
+  "ball_crowd_radius_m": 3.0,
+  "ball_logmult_per_crowd_player": 0.3,
+  "ball_crowd_cap": 6,
+  "ball_aerial_z_m": 2.0,
+  "ball_logmult_aerial": 1.386,
+  "ball_fast_mps": 20.0,
+  "ball_logmult_fast": 0.693,
+  "_drop_ball_z": "FACT DATA.md/starter baseline: ATD ball rows are x,y,speed only; no height.",
+  "drop_ball_z": true,
+
+  "_player_missing_frac": "FACT DATA.md: mean 20.5 tracked objects over graded frames for 22 players -> 1-20.5/22 = 0.068 (duplicates below add back ~0.01 object).",
+  "player_missing_frac": 0.068,
+  "_player_gap_mean_s": "ASSUMPTION: occlusion gaps ~2 s; no number published.",
+  "player_gap_mean_s": 2.0,
+  "_slots_per_team": "FACT DATA.md: 46 track slots for the match, each slot belongs to one team -> 23 per team. Tracklets get a random free slot (no identities).",
+  "slots_per_team": 23,
+  "slot_reuse_gap_frames": 25,
+  "_swap": "FACT (qualitative) DATA.md: slots 'swap identity'. ASSUMPTION: when two same-team players come within 1 m, their continuations exchange slots with prob 0.3.",
+  "swap_radius_m": 1.0,
+  "swap_prob": 0.3,
+  "_dup": "FACT (qualitative) DATA.md: count 'occasionally exceeds 22 when the tracker duplicates someone'. ASSUMPTION: 0.5 duplicate tracklets per team-minute, 0.5-3 s, offset N(0,0.7 m).",
+  "dup_per_min": 0.5,
+  "dup_len_s": [0.5, 3.0],
+  "dup_offset_m": 0.7,
+
+  "_jitter": "ASSUMPTION: automatic tracking noise, none published; AR(1) rho 0.9 (smooth, not white, so velocities stay plausible), sigma 0.2 m players, 0.3 m ball.",
+  "player_jitter_m": 0.2,
+  "ball_jitter_m": 0.3,
+  "jitter_rho": 0.9,
+
+  "keep_extra": []
+}

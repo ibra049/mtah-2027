@@ -1,23 +1,7 @@
 {
-  "_doc": "Documented constants of the target recording (vendor/challenge/DATA.md, games.py). Not tuned on anything. published_kickoff_frames are used ONLY by check_target (never by the pipeline).",
+  "_doc": "Target-recording settings. n_frames, fps, pitch and graded_blocks are NOT here: they are read from third_party/mtah_challenge/games.py by mtah.io_target.load_config. 'documented' holds published aggregates (DATA.md) used ONLY by mtah.check_target as parse assertions.",
   "game": "BAR-ATH",
   "stem": "BAR-ATH_tactical",
-  "n_frames": 199319,
-  "fps": 25,
-  "pitch": [
-    105.3,
-    68.0
-  ],
-  "graded_blocks": [
-    [
-      11185,
-      90651
-    ],
-    [
-      110808,
-      190197
-    ]
-  ],
   "home_name_contains": "barcelona",
   "tag_team_map": {
     "barcelona": "H",
@@ -38,5 +22,6 @@
       "1": 11185,
       "2": 113742
     }
-  }
+  },
+  "team_name": "Montreal"
 }

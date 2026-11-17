@@ -9,6 +9,10 @@
 set -u
 cd "$(dirname "$0")/.."
 export MTAH_DATA="${MTAH_DATA:-$HOME/mtah-data}"
+# Run THIS checkout's code: the shared venv's editable install points at the main checkout, so
+# without this a lane worktree would silently execute main's package.
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+[ -d "$PWD/.venv/bin" ] && export PATH="$PWD/.venv/bin:$PATH"
 mkdir -p "$MTAH_DATA/logs"
 ts=$(date +%Y%m%d-%H%M%S)
 log="$MTAH_DATA/logs/run-$ts.log"

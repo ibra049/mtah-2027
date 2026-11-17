@@ -225,6 +225,8 @@ def test_submit(tmp_path):
     assert lines[1] == "0,X" and lines[11185 + 1] == "11185,H" and lines[11184 + 1] == "11184,X"
     assert lines[90652 + 1] == "90652,X" and lines[190197 + 1] == "190197,H"
     assert lines[-1] == "199318,X"
-    if os.path.isdir(os.path.join(REPO, "vendor", "challenge", "evaluation")):
-        assert submit.validate(str(tmp_path / "s.csv"), n) is None
+    assert submit.validate(str(tmp_path / "s.csv"), n) is None
+    bad = tmp_path / "bad.csv"
+    bad.write_text("frame,label\n" + "".join(f"{i},H\n" for i in range(n - 1)))
+    assert submit.validate(str(bad), n) is not None
     assert submit.render(np.array(["h"] * n), cfg) == submit.render(codes, cfg)

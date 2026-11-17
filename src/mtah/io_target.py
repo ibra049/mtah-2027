@@ -30,8 +30,18 @@ HOME, AWAY = 0, 1
 
 
 def load_config(path: str | None = None) -> dict:
+    """configs/target.json + the published constants of third_party/mtah_challenge/games.py:
+    n_frames, fps, pitch (105.3 x 68.0) and graded_blocks (games.half_video_blocks)."""
+    from mtah.official import games
     with open(path or CONFIG_PATH) as fh:
-        return json.load(fh)
+        cfg = json.load(fh)
+    g = games.GAMES[cfg["game"]]
+    cfg.setdefault("n_frames", int(games.source_frames("tactical", cfg["game"])))
+    cfg.setdefault("fps", int(g["fps"]))
+    cfg.setdefault("pitch", [float(v) for v in g["pitch"]])
+    cfg.setdefault("graded_blocks", [[int(a), int(b)] for _, a, b in
+                                     games.half_video_blocks(cfg["game"])])
+    return cfg
 
 
 # ----------------------------------------------------------------------------------------------

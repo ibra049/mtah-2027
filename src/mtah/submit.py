@@ -57,11 +57,6 @@ def write(labels_by_frame, path: str, cfg: dict | None = None) -> str:
 
 
 def validate(path: str, n_rows: int) -> str | None:
-    """Official format check (vendor possession_metrics.validate_submission). None if valid."""
-    import sys
-    from mtah.io_target import REPO
-    ev = os.path.join(REPO, "vendor", "challenge", "evaluation")
-    if ev not in sys.path:
-        sys.path.insert(0, ev)
-    import possession_metrics as pm
+    """Official format check (possession_metrics.validate_submission). None if valid."""
+    from mtah.official import pm
     return pm.validate_submission(pm.read_label_csv(path), n_rows)
