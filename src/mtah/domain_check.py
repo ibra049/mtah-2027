@@ -45,7 +45,28 @@ def main(argv=None):
                     help="labels the decoder lane exported from that proba: <dir>/<half>.npy")
     ap.add_argument("--no-repredict", action="store_true",
                     help="skip re-predicting with the config's artefact (faster)")
+    ap.add_argument("--profiles", default=None,
+                    help="comma list of <profile>_<seed> (e.g. nominal_0,nominal_1,harsh_0,harsh_1);"
+                         " with --proba-root/--labels-root runs every folder in one call")
+    ap.add_argument("--proba-root", default=None, help="e.g. ~/mtah-external/preds/lgb_v1/oof")
+    ap.add_argument("--labels-root", default=None, help="e.g. ~/mtah-external/labels/v1")
     args = ap.parse_args(argv)
+    if args.profiles:
+        rc = 0
+        for ps in args.profiles.split(","):
+            profile, seed = ps.rsplit("_", 1)
+            sub = ["--config", args.config, "--halves", args.halves, "--profile", profile,
+                   "--seed", seed, "--cache", args.cache]
+            if args.proba_root:
+                sub += ["--ref-proba-dir", os.path.join(os.path.expanduser(args.proba_root), ps)]
+            if args.labels_root:
+                sub += ["--ref-labels-dir", os.path.join(os.path.expanduser(args.labels_root), ps)]
+            if args.no_repredict:
+                sub.append("--no-repredict")
+            print(f"== {ps}", flush=True)
+            rc |= main(sub)
+        print(f"domain_check_all all_ok={int(rc == 0)}")
+        return rc
     with open(_repo_path(args.config) if not os.path.exists(args.config) else args.config) as fh:
         config = json.load(fh)
     with open(os.path.join(REPO, "configs", "labels.json")) as fh:
