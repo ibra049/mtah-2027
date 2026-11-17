@@ -345,3 +345,32 @@ def test_static_stretches():
     tr[300:330] = [5.0, 5.0]                            # 30 static frames (too short)
     out = static_stretches(tr, 125, 0.2)
     assert out == [(99, 260)] or out == [(100, 260)]
+
+
+def test_audits_accept_a_canonicalisation_callable():
+    from mtah import ball_audit, player_audit
+    rng = np.random.default_rng(1)
+    T = 400
+    P, B = random_game(rng, T, [0] * 5 + [1] * 5, p_ball_missing=0.2, p_player_missing=0.1)
+    seq = Sequence("t", 1, np.arange(T), np.c_[(B - .5) * 100, np.full(T, np.nan)].astype(np.float32),
+                   ((P[:, :5] - .5) * 100).astype(np.float32), ((P[:, 5:] - .5) * 100).astype(np.float32),
+                   np.array([105.0, 68.0], np.float32), np.full(T, -1, np.int8))
+    calls = []
+
+    def canon(s):
+        calls.append(1)
+        return s
+    r1 = ball_audit.audit(seq, canon)
+    r2 = player_audit.audit(seq, canon)
+    assert len(calls) == 2 and "g6" in r1 and "p4" in r2
+    with pytest.raises(SystemExit):
+        player_audit.resolve_canon("no_such_function_xyz")
+
+
+def test_stack_shift_standardisation():
+    from mtah.stack_shift import shifts
+    ref = {"d": [-1, -0.5, 0, 0.5, 1], "share_pD_gt_0.5": 0.4}
+    tgt = {"d": [-1, -0.25, 0.5, 0.5, 1], "share_pD_gt_0.5": 0.5}
+    zs, diffs = shifts(tgt, ref, [5, 25, 50, 75, 95])
+    assert zs["d"] == [0.0, 0.25, 0.5, 0.0, 0.0]
+    assert abs(diffs["share_pD_gt_0.5"] - 0.1) < 1e-12

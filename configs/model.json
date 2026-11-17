@@ -1,25 +1,36 @@
 {
   "_doc": "Frame model (mtah.model): two LightGBM heads on mtah.features. Every value is chosen on external data only (leave-one-match-out over the 5 non-holdout IDSSE matches); nothing is fitted to the target.",
   "seed": 20271117,
-
-  "_feature_version": "Feature-set version of mtah.features the model is trained and run with (recorded in the artefact).",
-  "feature_version": 3,
-  "_drop_features": "Regexes of feature names the model does not use. @raw_kinematics = features.RAW_KINEMATICS: player speeds, block velocity and ball velocity jumps in absolute m/s. Their twins in units of each half's own scale (speeds clipped from below at 1 m/s, velocity jumps in units of the tracking noise) stay. Reason: label-free checks show the target's tracking is smoother than the simulated one (motionless players exist on clean tracking and on the target, never in the degraded data), so the low end of absolute speeds means something else there.",
-  "drop_features": ["@raw_kinematics", "^n_reg_players$"],
-  "_n_reg_players": "Dropped: the simulator pins the visible-player count (20.5), so the trees could only overfit its tiny spread.",
-
-  "_stride": "Uniform rows: every stride-th frame per sequence from a random phase (25 fps frames are near-duplicates; ten noise draws per match (five degradation profiles x two seeds), each at its own phase, add more than denser sampling, and a fold stays within the 8 GB machine).",
-  "stride": 24,
+  "_feature_version": "Feature-set version of mtah.features the model is trained and run with (recorded in the artefact). 4 = canonical inputs: short ball gaps interpolated, ball and player tracks low-pass filtered, kinematics over 0.3 s baselines, touch thresholds from the half's own quantiles.",
+  "feature_version": 4,
+  "_drop_features": "Regexes of feature names no head uses. @raw_kinematics = features.RAW_KINEMATICS: player speeds, block velocity and ball velocity changes in absolute m/s; their twins in units of each half's own scale (speeds clipped from below at 1 m/s) stay.",
+  "drop_features": [
+    "@raw_kinematics"
+  ],
+  "_head_drop": "Features a single head may not split on. The alive/dead head stays simple: no touch or kick timing, no control clocks, no nearest-team dwell, no regime descriptors. Those earn their gain on team identity; on the target a 'long time since the last touch' with the ball in view made an earlier model cut live play (label-free check).",
+  "head_drop": {
+    "dead": [
+      "_tch_",
+      "_kick_",
+      "ctrl",
+      "hold",
+      "^d_turn",
+      "^n_reg_"
+    ]
+  },
+  "_stride": "Uniform rows: every stride-th frame per sequence from a random phase (25 fps frames are near-duplicates; nine noise draws per match, each at its own phase, add more than denser sampling, and a fold stays within the 8 GB machine).",
+  "stride": 28,
   "_stride_near": "Dense rows: every stride_near-th frame within near_radius frames of a direct team change or inside a possession shorter than short_poss frames. spellF1 scores possessions, and v1's errors sat there (team accuracy 0.55 within 6 frames of a change, 0.70 within 1 s, 0.98 beyond 3 s). The team head keeps this emphasis; the dead and change heads are weighted back to the frame distribution.",
-  "stride_near": 6,
+  "stride_near": 7,
   "near_radius": 25,
   "short_poss": 50,
-  "emphasis_heads": ["team"],
+  "emphasis_heads": [
+    "team"
+  ],
   "_change_radius": "Positive window of the onset hint: a direct team change within this many frames (the decoder snaps to the peak).",
   "change_radius": 5,
   "_swap_prob": "Each training row is exchanged home<->away with this probability (exact feature transform). Prediction averages both orientations, so the output is exactly team-symmetric.",
   "swap_prob": 0.5,
-
   "_lgb": "Conservative trees: frames of a match are correlated and the model must transfer across matches and to another tracking provider.",
   "lgb": {
     "learning_rate": 0.08,
@@ -33,5 +44,9 @@
     "num_threads": 4
   },
   "_rounds": "Fixed boosting rounds per head (no early stopping inside a fold, so out-of-fold predictions never see their own match). v1 (lr 0.05, 400 rounds) was still improving on every held-out curve at its last round.",
-  "rounds": {"dead": 500, "team": 500, "change": 300}
+  "rounds": {
+    "dead": 500,
+    "team": 500,
+    "change": 300
+  }
 }

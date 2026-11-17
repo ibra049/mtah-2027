@@ -227,3 +227,28 @@ def test_raw_kinematics_token(train):
     assert not any(re.search(p, n) for p in features.RAW_KINEMATICS for n in small["names"])
     assert "n_sp_mean_rel" in small["names"] and "n_bdv_rel" in small["names"]
     assert "n_bspeed" in small["names"]                      # ball speed itself is kept
+
+
+def test_prediction_does_not_depend_on_thread_count(art, test_seq, monkeypatch):
+    one = model.predict_both(art, test_seq)
+    monkeypatch.setattr(model, "PREDICT_THREADS", 4)
+    four = model.predict_both(art, test_seq)
+    np.testing.assert_array_equal(one[0], four[0])
+    np.testing.assert_array_equal(one[1]["turn_onset"], four[1]["turn_onset"])
+
+
+def test_head_drop_keeps_features_out_of_one_head_only(train, test_seq):
+    cfg = dict(CFG, rounds={"dead": 15, "team": 15, "change": 5},
+               head_drop={"dead": ["_tch_", "_kick_", "hold", "^d_turn", "^n_reg_", "ctrl"]})
+    art = model.fit(train[:2], cfg)
+    names = art["names"]
+    banned = set(model.head_excluded(names, cfg, "dead"))
+    assert len(banned) > 50 and not model.head_excluded(names, cfg, "team")
+    used = lambda head: {n for n, g in zip(names, art[head].feature_importance("split")) if g > 0}   # noqa: E731
+    assert not (used("dead") & banned)                     # never split on in the dead head
+    assert used("team") & banned                           # still available to the team head
+    p = model.predict_proba(art, test_seq)
+    np.testing.assert_allclose(model.predict_proba(art, features.swap_seq(test_seq)), p[:, [A, H, D]], atol=1e-6)
+    # determinism with the gain multipliers in place
+    again = model.fit(train[:2], cfg)
+    assert again["dead"].model_to_string() == art["dead"].model_to_string()

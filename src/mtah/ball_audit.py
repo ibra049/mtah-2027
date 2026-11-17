@@ -64,7 +64,13 @@ def _autocorr(v, k):
     return float(np.corrcoef(a[ok], b[ok])[0, 1])
 
 
-def audit(seq) -> dict:
+def audit(seq, canon=None, with_nobs=False) -> dict:
+    """canon: optional callable Sequence -> Sequence (e.g. features.canonicalize, feature
+    version 4) applied before every statistic, touches included. with_nobs: also the share of
+    frames where features.compute(seq, 4) has n_obs == 1 (slow: a full feature pass)."""
+    raw = seq if with_nobs else None
+    if canon is not None:
+        seq = canon(seq)
     T = len(seq)
     minutes = T / FPS / 60.0
     s3 = features._in_play(seq)
@@ -79,6 +85,8 @@ def audit(seq) -> dict:
     out["g1"] = dict(obs=obs.mean(), gaps=len(gaps), gap_med=q[0], gap_p75=q[1], gap_p90=q[2],
                      miss_in_ge4=sum((b - a) for a, b in _runs(~obs) if b - a >= 4 * FPS) / miss,
                      miss_in_ge10=sum((b - a) for a, b in _runs(~obs) if b - a >= 10 * FPS) / miss)
+    out["g1b"] = {f"miss_in_ge{L}": sum((b - a) for a, b in _runs(~obs) if b - a >= L * FPS) / miss
+                  for L in (20, 30)}
 
     # g2 speed
     c3 = np.zeros(T, bool)
@@ -141,6 +149,30 @@ def audit(seq) -> dict:
         g6[f"{tag}_pm_obs"] = (n - nh) / obs_min
         g6[f"{tag}_hid_share"] = nh / n if n else float("nan")
     out["g6"] = g6
+    # g7: the feature-version-4 detector on the (canonicalised) track, when it exists
+    if canon is not None and hasattr(features, "touch_events_v4"):
+        ev = features.touch_events_v4(seq)
+        stream = np.asarray(ev.get("stream", np.zeros(len(ev["t"]))))
+        hid = np.asarray(ev.get("hid", np.zeros(len(ev["t"]))))
+        g7 = {}
+        if hasattr(features, "touch_thresholds"):
+            bc = np.asarray(seq.ball[:, :2], np.float32)
+            oc = ~np.isnan(bc).any(1)
+            thrs, scale = features.touch_thresholds(
+                features.ball_jump(bc, oc, features.V4_LAGS["touch"]))
+            g7.update(thr_s=thrs[0], thr_k=thrs[1], v4_scale=scale, obs_canon=oc.mean())
+        if raw is not None:
+            X, names = features.compute(raw, 4)
+            g7["n_obs_share"] = float(np.nanmean(X[:, names.index("n_obs")] == 1))
+        g7b = {}                              # separate line: SAFE lines must stay < 240 chars
+        for k, name in ((0, "v4s"), (1, "v4k")):
+            sel = stream == k
+            n, nh = int(sel.sum()), int((sel & (hid > 0)).sum())
+            g7b[f"{name}_pm"] = n / minutes
+            g7b[f"{name}_pm_obs"] = (n - nh) / obs_min
+            g7b[f"{name}_hid"] = nh / n if n else float("nan")
+        out["g7"] = g7
+        out["g7b"] = g7b
     return out
 
 
@@ -157,6 +189,11 @@ def emit(src, half, res, prefix=""):
 
 
 def external_sources():
+    """(source, half, path) for every external reference; shared by ball_audit and player_audit.
+    stoppage_sm: every half of seeds 0 and 1 (DFL and Metrica), source tagged with the drawn
+    ball smoothing sigma (frames) from its sidecar."""
+    import glob
+    import json
     dfl = ("J03WMX", "J03WN1")
     for m in dfl:
         for p in (1, 2):
@@ -164,29 +201,48 @@ def external_sources():
     for g in (1, 2, 3):
         for p in (1, 2):
             yield "metrica_clean", f"M{g}_{p}", os.path.join(EXT, "cache_metrica", f"METRICA{g}_{p}.npz")
-    for prof in ("nominal_lj", "stoppage_lj"):
+    for prof in ("nominal", "stoppage", "nominal_lj", "stoppage_lj"):
         for m in dfl:
             for p in (1, 2):
                 yield prof, f"{m}_{p}", os.path.join(EXT, "cache_deg", prof, "0", f"{m}_{p}.npz")
+    for seed in ("0", "1"):
+        for path in sorted(glob.glob(os.path.join(EXT, "cache_deg", "stoppage_sm", seed, "*.npz"))):
+            if path.endswith(".tmp.npz"):
+                continue
+            half = os.path.basename(path)[:-4]
+            sig = ""
+            try:
+                with open(path[:-4] + ".json") as fh:
+                    sig = f"{json.load(fh)['drawn']['ball_smooth_sigma_f']:.1f}"
+            except (OSError, KeyError, ValueError):
+                pass
+            yield "stoppage_sm", f"s{seed}_{half}_sig{sig}", path
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", action="store_true")
     ap.add_argument("--external", action="store_true")
+    ap.add_argument("--canon", default=None,
+                    help="name of a canonicalisation callable in mtah.features, applied first")
+    ap.add_argument("--nobs", action="store_true",
+                    help="with --canon: share of frames where features.compute(seq, 4) has n_obs == 1")
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     a = ap.parse_args(argv)
+    from mtah.player_audit import resolve_canon
+    canon = resolve_canon(a.canon)
+    tag = f"+{a.canon}" if a.canon else ""
     if a.target:
         from mtah import io_target
         for seq in io_target.load(a.data_dir, io_target.load_config(), dtype=np.float32,
                                   with_tags=False):
-            emit("target", seq.period, audit(seq), prefix="SAFE| ")
+            emit("target" + tag, seq.period, audit(seq, canon, a.nobs), prefix="SAFE| ")
     if a.external:
         for src, half, path in external_sources():
             if not os.path.isfile(path):
-                print(f"src={src} half={half} missing=1")
+                print(f"src={src}{tag} half={half} missing=1")
                 continue
-            emit(src, half, audit(Sequence.load(path)))
+            emit(src + tag, half, audit(Sequence.load(path), canon, a.nobs))
     return 0
 
 
