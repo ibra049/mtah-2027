@@ -53,7 +53,7 @@ ship (Section 9).
 | dataset | source and licence | labelled by | role |
 |---|---|---|---|
 | IDSSE (DFL / Sportec open data), 7 Bundesliga matches, 25 fps | Bassek et al. 2025, *Sci. Data* 12:195, doi:10.1038/s41597-025-04505-y; data doi:10.6084/m9.figshare.28196177; CC BY 4.0 | the provider: per-frame `BallStatus` / `BallPossession` of the corrected tracking | training and development on J03WMX, J03WN1, J03WOH, J03WOY, J03WPY; holdout on J03WQQ, J03WR9 |
-| Metrica Sports sample data, 3 games | github.com/metrica-sports/sample-data | rule-based labels from the provider's own event chain and event definitions | parser tests; second development set in the target provider's own semantics (never trained on) |
+| Metrica Sports sample data, 3 games | github.com/metrica-sports/sample-data | rule-based labels from the provider's own event chain and event definitions | parser tests; second development set in the target provider's own semantics. The shipped model is not trained on it (one unshipped experiment was, Section 8) |
 
 - **No hand labels**, and nothing from BAR-ATH, are used for training, tuning or validation.
 - **Label mapping:** `BallStatus 0 → D`, else `BallPossession 1 → H`, `2 → A`. Home = 1 is
@@ -195,7 +195,7 @@ All selection uses external data:
 - **Selection metric (select):** official spellF1 averaged over the three label views, the
   nominal and stoppage profiles, seeds 0 and 1, and the 5 matches.
 - **Adoption rule:** paired gain at least +0.01, losing on at most one of the 5 matches.
-- **Metrica** (never trained on) is a veto set.
+- **Metrica** (no shipped model is trained on it) is a veto set.
 - **Holdout:** scored once, on the locked candidate (J03WQQ, J03WR9; same degraded profiles and frozen decoder): v4p select 0.7260 against 0.2613 for the official smooth50 baseline on the same halves, a gain of +0.43 and +0.50 on the two matches; macroF1 0.939 against 0.407. The holdout did not change the candidate.
 
 The organisers' baseline on the same protocol (`docs/proxy_check.md`; target = published
