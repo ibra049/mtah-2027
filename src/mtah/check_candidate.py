@@ -38,9 +38,10 @@ def length_shares(durations_s, limits=(1, 2, 4)) -> dict:
     return {f"share_lt{l}s": f4((d < l).mean()) if len(d) else "nan" for l in limits}
 
 
-def tag_agreement(codes, tags, phase_cfg):
+def tag_agreement(codes, tags, phase_cfg, ball=None):
     """{category: (n_alive_frames, share agreeing)} plus per-code rows. codes: 0 H, 1 A, 2 D, 3 X.
-    Frames counted once per tag (overlapping tags each count)."""
+    Frames counted once per tag (overlapping tags each count). With `ball` (bool [n], ball
+    observed), also keys '<category>|ball' and '<category>|noball'."""
     side = {"H": 0, "A": 1}
     cat_of = {c.upper(): k for k in ("attacking", "defending", "other") for c in phase_cfg[k]}
     acc = {}
@@ -50,11 +51,18 @@ def tag_agreement(codes, tags, phase_cfg):
         if team is None or cat not in ("attacking", "defending"):
             continue
         want = team if cat == "attacking" else 1 - team
-        window = codes[max(0, int(t["start"])):max(0, int(t["end"]))]
-        alive = window[(window == 0) | (window == 1)]
-        for key in (cat, "code:" + str(t["code"]).strip().upper().replace(" ", "_")):
-            n, k = acc.get(key, (0, 0))
-            acc[key] = (n + len(alive), k + int((alive == want).sum()))
+        a, b = max(0, int(t["start"])), max(0, int(t["end"]))
+        window = codes[a:b]
+        is_alive = (window == 0) | (window == 1)
+        groups = [((cat, "code:" + str(t["code"]).strip().upper().replace(" ", "_")), is_alive)]
+        if ball is not None:
+            bw = ball[a:b]
+            groups += [((cat + "|ball",), is_alive & bw), ((cat + "|noball",), is_alive & ~bw)]
+        for keys, sel in groups:
+            got = window[sel]
+            for key in keys:
+                n, k = acc.get(key, (0, 0))
+                acc[key] = (n + len(got), k + int((got == want).sum()))
     return {key: (n, (k / n) if n else float("nan")) for key, (n, k) in acc.items()}
 
 
@@ -123,10 +131,23 @@ def main(argv=None):
         share_D_given_ball_missing=f4((g[bm] == 2).mean()) if bm.any() else "nan")
 
     if tags is not None:
-        agree = tag_agreement(codes, tags, cfg["tag_phase"])
+        agree = tag_agreement(codes, tags, cfg["tag_phase"], ball=~ball_missing)
         for cat in ("attacking", "defending"):
             nn, share = agree.get(cat, (0, float("nan")))
-            say(tag_phase=cat, alive_frames=nn, share_agree=f4(share))
+            nb, sb = agree.get(cat + "|ball", (0, float("nan")))
+            nm, sm = agree.get(cat + "|noball", (0, float("nan")))
+            say(tag_phase=cat, alive_frames=nn, share_agree=f4(share), alive_ball_obs=nb,
+                share_agree_ball_obs=f4(sb), alive_ball_missing=nm,
+                share_agree_ball_missing=f4(sm))
+        from mtah.tag_stats import masks
+        m = masks(tags, n, cfg["tag_phase"])
+        both = m["att_H"] & m["att_A"] & graded
+        alive_both = both & ((codes == 0) | (codes == 1))
+        nb = int(alive_both.sum())
+        say(both_team_attacking_frames=int(both.sum()), both_team_alive_frames=nb,
+            both_team_share_H=f4((codes[alive_both] == 0).mean()) if nb else "nan",
+            both_team_share_A=f4((codes[alive_both] == 1).mean()) if nb else "nan",
+            both_team_share_D=f4((codes[both] == 2).mean()) if both.any() else "nan")
         if args.per_code:
             for key in sorted(k for k in agree if k.startswith("code:")):
                 nn, share = agree[key]
