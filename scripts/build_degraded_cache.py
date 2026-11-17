@@ -19,6 +19,19 @@ OUT = io_idsse.ROOT.parent / "cache_deg"
 ALL_MATCHES = sum(io_idsse.SPLITS.values(), [])
 
 
+def clean_half(match_id, period):
+    """Clean canonical half; parses the raw files and writes the clean cache on first use, so the
+    builder also runs on a fresh machine (README 'Retrain on external data', step 1)."""
+    if match_id.startswith("METRICA"):
+        g = int(match_id[7:])
+        path = io_metrica.cache_path(g, period)
+        if not path.exists():
+            for s in io_metrica.build(g):
+                s.save(io_metrica.cache_path(g, s.period))
+        return io_idsse.Sequence.load(path)
+    return {s.period: s for s in io_idsse.load(match_id)}[period]
+
+
 def _dropout_note(metrica, profile):
     if not metrica:
         if profile == "gapstress":
@@ -42,8 +55,7 @@ def build(profile, seed, match_id, period, force=False):
         return None
     t = time.time()
     metrica = match_id.startswith("METRICA")
-    src = io_metrica.cache_path(int(match_id[7:]), period) if metrica else io_idsse.cache_path(match_id, period)
-    seq = io_idsse.Sequence.load(src)
+    seq = clean_half(match_id, period)
     cfg = degrade.load_profile(profile)
     if profile == "gapstress" and not metrica:
         cfg["ball_split"] = True     # DFL: separate alive / dead dropout chains

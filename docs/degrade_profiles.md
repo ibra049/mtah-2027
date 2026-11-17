@@ -112,3 +112,15 @@ Reading:
 - **v4 and its stacked successors keep their lead under the filter.** Their dead share stays
   within .003–.017 of truth, and they produce fewer spurious dead runs than v1.
 - **Use as a veto:** a new model must not lose its lead or over-call dead ball on these profiles.
+
+**Metrica games in training (lgb_v4m / v4mp): not shipped.**
+- **What happened:** v4mp beat v4p on every Metrica draw with leave-one-game-out predictions
+  (above). model-45's breakdown shows the gain is stoppage-edge timing, not team identity.
+- **Why it can't be trusted:** the Metrica sample blanks the ball on 96% of dead-ball frames in the
+  clean data, and on about 98% in every degraded draw. In DFL the share is drawn, with a median of
+  .73 on stoppage_sm. So in those games the ball gaps are effectively the stoppage labels. A model
+  trained on them can read stoppage edges straight from the input, and leave-one-game-out cannot
+  expose that, because every game shares the property.
+- **What the target showed:** consistent with this, base-only v4m on the target puts more of its
+  dead ball inside ball gaps than v4 (D given ball missing .899 against .880, same total dead
+  share). The locked candidate is therefore v4p, trained on DFL only.
