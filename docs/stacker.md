@@ -128,7 +128,7 @@ artefact. `_sm` are the smoothed, gap-filled draws closest to the target (veto s
 | DFL nominal_sm / stoppage_sm | 0.6498 / 0.6827 | +0.011 / +0.007 (5/5) | +0.015 / +0.018 (5/5) |
 | DFL harsh | 0.6307 | 0.6399 (+0.009, 5/5) | 0.6467 (+0.016, 5/5) |
 | Metrica select | 0.7359 | 0.7512 (+0.015, 3/3) | 0.7572 (+0.021, 3/3) |
-| Metrica nominal_sm / stoppage_sm | 0.6887 / 0.7313 | +0.015 / +0.025 (3/3) | +0.026 / +0.031 (3/3) |
+| Metrica nominal_sm / stoppage_sm | 0.6887 / 0.7313 | +0.015 / +0.025 (3/3) | +0.026 / +0.033 (3/3) |
 | Metrica gapstress | 0.7173 | 0.7352 (+0.018, 3/3) | 0.7455 (+0.028, 3/3) |
 
 Sensitivity of `v4p` to its onset input (Metrica games, gain over plain v4, onset multiplied
@@ -155,6 +155,33 @@ Without a stacker `lgb_v4s` equals `lgb_v4` externally (DFL selection value −0
 +0.001; only the smoothed nominal draw improves, +0.009 / +0.012). With the with-onset stacker
 it gains +0.018 over plain `lgb_v4s` (5/5) and, against `v4p`, is equal on the DFL selection
 value (−0.001) and better only on the two smoothed DFL draws (+0.013 and +0.007).
+
+### On `lgb_v4m` (v4 with the three Metrica sample games added to training): not adopted
+
+`lgb_v4m` and its with-onset stacker (`v4mp`, `models/stack_lgb_v4mp`) were the last candidate
+examined. Against the shipped `v4p`, frozen decoder:
+
+| data | `v4p` | `v4mp` |
+|---|---|---|
+| DFL select (5 matches, leave-one-match-out) | 0.6904 | 0.6886 (−0.002, 2/5) |
+| DFL nominal_sm / stoppage_sm / gapstress | 0.6644 / 0.7006 / 0.6798 | +0.008 / +0.007 / +0.009 |
+| Metrica select (leave-one-game-out frame model) | 0.7572 | 0.7713 (+0.014, 3/3) |
+| Metrica nominal_sm / stoppage_sm | 0.7147 / 0.7642 | +0.017 / +0.021 (3/3) |
+| Metrica nominal_lj / stoppage_lj | 0.7391 / 0.7914 | +0.029 / +0.030 (3/3) |
+
+On the smoothed Metrica draws the gain is not bought with dead-ball errors: per game, `v4mp` has
+fewer spurious dead runs (13.0 → 10.5, 7.0 → 5.5, 7.5 → 7.0 on the nominal draw), fewer missed
+ones and a higher alive-dead F1 (+0.005 to +0.011) (`scripts/dead_check.py`).
+
+It was nevertheless **not adopted**. The model lane's breakdown shows that the Metrica gain of
+`lgb_v4m` is stoppage-edge timing, with team identity on short possessions unchanged, and the
+external-data lane found the input property behind it: in the Metrica sample product the ball is
+blanked during dead ball in 98% of frames in every degradation draw, so a model trained on those
+games can read the edges of a stoppage from the ball gaps. Leave-one-game-out cannot expose this,
+because the held-out game has the same property; the target's automatic tracker loses and
+re-finds the ball on its own schedule. On DFL, which does not have the property, `v4mp` is equal
+to `v4p`. The Metrica evidence therefore does not count as evidence for the target, and `v4p`
+stays.
 
 ### Variants tried and rejected
 

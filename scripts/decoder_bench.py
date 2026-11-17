@@ -50,7 +50,7 @@ METRICA = ["METRICA1", "METRICA2", "METRICA3"]      # second dev set (veto only,
 SPLITS = {"oof5": dict(matches=OOF5, sub="oof", cache="cache"),
           "metrica": dict(matches=METRICA, sub="metrica", cache="cache_metrica")}
 CUR = dict(SPLITS["oof5"])                          # set from --split in main()
-PROFILES = ("nominal", "stoppage", "harsh", "nominal_lj", "stoppage_lj", "nominal_sm", "stoppage_sm")
+PROFILES = ("nominal", "stoppage", "harsh", "nominal_lj", "stoppage_lj", "nominal_sm", "stoppage_sm", "gapstress")
 TAG_ROOT = "cache_tags_v2"       # simulated Smart Tagging with the target's window structure
 WITH_BALL = False                # --ball: hand the degraded ball track to decode() via seq.ball
 SEEDS = (0, 1)
