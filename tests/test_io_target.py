@@ -322,3 +322,15 @@ def test_half_stats():
     assert s["share_lt1s"] == "0.3333" and s["share_lt2s"] == "0.6667" and s["share_lt4s"] == "1.0000"
     assert s["median_dead_s"] == f"{np.median([0.48, 2.0]):.2f}"
     assert s["dead_share"] == f"{62 / 172:.4f}"
+
+
+def test_dead_run_stats():
+    from mtah.check_candidate import dead_run_stats
+    fps = 25
+    # D(10s) H(20s) D(2s) A(20s) D(4s) H(20s) D(9s) H(10s) D(5s)  -> inner dead: 2, 4, 9 s
+    parts = [(2, 10), (0, 20), (2, 2), (1, 20), (2, 4), (0, 20), (2, 9), (0, 10), (2, 5)]
+    codes = np.concatenate([np.full(int(s * fps), k, np.int8) for k, s in parts])
+    s = dead_run_stats(codes, 0, len(codes))
+    assert s["n_dead_inner"] == 3
+    assert s["dead_lt3s"] == "0.3333" and s["dead_lt5s"] == "0.6667" and s["dead_lt8s"] == "0.6667"
+    assert s["dead_per_min"] == f"{3 / (len(codes) / fps / 60):.4f}"
