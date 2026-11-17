@@ -3,8 +3,8 @@
 More Than A Hack 2027, Initial Challenge. Team **Montreal**.
 Code: https://github.com/ibra049/mtah-2027. The file is regenerated with one command (see Reproduction).
 
-> **Status of this document.** Sections marked **TODO** describe parts whose final numbers are
-> not yet measured. Nothing below is estimated or invented. The appendix describes the fallback
+> **Status of this document.** The only **TODO** left is the holdout score, which is not yet
+> measured. Nothing below is estimated or invented. The appendix describes the fallback
 > file (the organisers' reference baseline, reproduced byte for byte), which keeps the document
 > accurate whichever file is uploaded.
 
@@ -216,8 +216,9 @@ selection.
   stretches than any external match. This document will name the shipped candidate once that
   decision is made.
 
-Public 5-minute window: used only as a breakage check (alignment and label meaning, pass/fail).
-**TODO** flags of the shipped file.
+Public 5-minute window: reserved as a breakage check only (alignment and label meaning,
+pass/fail). **Not run** on the shipped file. The fallback's frame alignment was verified
+instead by reproducing the organisers' four published baseline files byte for byte.
 
 ## 9. Limitations
 
@@ -253,11 +254,16 @@ data is documented in the README.
 
 ## 11. Rule compliance
 
-- **External-only training and tuning.** Every learned parameter and every selection decision
-  comes from the IDSSE and Metrica sample data. Documented facts about the target (ball
-  visibility, slot count) only set the noise model's FACT parameters.
-- **Ground truth.** The public 5-minute window is a pass/fail breakage check and never ranks two
-  versions. No hand labels; nothing checked against the video.
+- **External-only training and tuning.** Every learned parameter, every tuned value and the
+  adoption rule's scores come from the IDSSE and Metrica sample data. Documented facts about
+  the target (ball visibility, slot count) only set the noise model's FACT parameters.
+- **Label-free target checks.** The choice between finished candidates also looked at
+  label-free sanity statistics of each candidate's own output on the target: possession and
+  dead-stretch lengths, and agreement with the provided Smart Tagging. These use no ground
+  truth and fit no parameter.
+- **Ground truth.** The public 5-minute window is reserved as a pass/fail breakage check and
+  never ranks two versions; it was not run on the shipped file. No hand labels; nothing was
+  checked against the video.
 - **No competition data in any AI context.** We built this with AI coding assistants, so the
   data was kept out of their context as follows.
   - The data lives outside the repository and a tool guard blocks every direct read of it.
