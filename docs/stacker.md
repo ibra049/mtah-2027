@@ -55,7 +55,73 @@ both from the stored frame-model outputs and end to end from the degraded sequen
 `meta.json` in the artefact names the base model module and artefact; the booster file is checked
 against its recorded SHA-256 on load, and the feature list is checked on every call.
 
-## Results
+## Two feature sets
 
-Filled from `scripts/decoder_bench.py compare --model <base> --model-b <base>s` (frozen decoder on
-both sides); see the tables below.
+- **standard** (135 columns): everything listed above.
+- **outputs only** (79 columns, `use_cues: false`): the frame model's probabilities and onset
+  only, with no ball-observed flag, no nearest-player margin and no time since/until the ball.
+  This variant cannot react to a tracking property the frame model has not already digested, so
+  it transfers exactly as far as the frame model does.
+
+## Results (frozen decoder on both sides; paired rule: ≥ +0.01 mean, non-negative on ≥ 4 of 5)
+
+Family = mean official spellF1 over the label views 0 / 0.5 / 1.0 s.
+
+### On `lgb_v1` (the frame model that transfers cleanly to the target)
+
+| data | plain v1 | + stacker, standard | + stacker, outputs only |
+|---|---|---|---|
+| DFL nominal (5 matches) | 0.6469 | 0.6729 (+0.026, 5/5) | 0.6697 (+0.023, 5/5) |
+| DFL harsh | 0.6161 | 0.6348 (+0.019, 5/5) | 0.6300 (+0.014, 5/5) |
+| Metrica nominal (3 games) | 0.6575 | 0.6677 (+0.010, 2/3) | 0.6910 (+0.034, 3/3) |
+| Metrica harsh | 0.6088 | 0.6175 (+0.009, 3/3) | 0.6436 (+0.035, 3/3) |
+| Metrica nominal, low jitter | 0.6740 | 0.6982 (+0.024, 2/3) | 0.7137 (+0.040, 3/3) |
+| Metrica stoppage, low jitter | 0.7115 | 0.7456 (+0.034, 3/3) | 0.7487 (+0.037, 3/3) |
+
+The standard set is 0.003 better on DFL nominal but loses most of its gain on the Metrica games,
+through the alive/dead decision (alive-dead F1 0.953 → 0.943): the ball cues it learned on the
+DFL degradation draws misread Metrica's stoppage gaps. The outputs-only set keeps alive-dead F1
+at 0.952 and gains on every Metrica game in every draw. It is the one selected
+(`models/stack_lgb_v1p`, `configs/v1p.json`).
+
+What changes in the output (view 0.5 s, outputs-only): recall at IoU 0.5 of true possessions of
+1–2 s rises from 0.24 to 0.31 on DFL and from 0.25 to 0.36 on Metrica, of 2–5 s from 0.54 to 0.58
+and from 0.51 to 0.58; team changes matched within one second from 0.42 to 0.47 (DFL) and from
+0.51 to 0.58 (Metrica), with the rate of spurious changes unchanged. The dead-ball share and the
+number of dead-ball runs do not move.
+
+### On `lgb_v2` (three degradation profiles, so the selection value exists)
+
+| data | plain v2 | + stacker, standard |
+|---|---|---|
+| DFL nominal | 0.6730 | 0.6845 (+0.012, 5/5) |
+| DFL stoppage | 0.6842 | 0.6962 (+0.012, 5/5) |
+| DFL select (mean of the two) | 0.6786 | 0.6903 (+0.012, 5/5) |
+| DFL harsh | 0.6270 | 0.6438 (+0.017, 5/5) |
+| Metrica nominal / harsh | 0.7110 / 0.6592 | 0.7371 / 0.6878 (+0.026 / +0.029, 3/3) |
+
+### Variants tried and rejected
+
+- **Possession-length sample weights** (short possessions weighted up to 4×): recall of 1–2 s
+  possessions rises to 0.51, but precision falls from 0.78 to 0.67; with the frozen decoder the
+  selection value drops by 0.015 and the Metrica games by 0.06.
+- **Re-tuning the decoder on stacked probabilities**: the switch-cost plateau is 3000–6000 as
+  before (0.6893 / 0.6903 / 0.6915 / 0.6893 at 3000 / 4500 / 6000 / 9000); the frozen decoder is
+  kept.
+
+### Related experiment: hybrid of two frame models (`scripts/hybrid_oof.py`)
+
+Dead-ball mass from `lgb_v1`, team split from `lgb_v2` or `lgb_v3`
+(`mtah.model_hybrid.combine`): +0.023 and +0.020 over v1 on DFL nominal. Gating shows where that
+comes from: using the newer team split only on frames where both models name the same team gains
++0.002; using it only where they disagree gains +0.022. The benefit is the newer model overruling
+v1's team call, i.e. it rests on the touch features that are out of range on the target. The
+hybrid was therefore not selected; the stacker, which adds no new input, was.
+
+## Label-free transfer check
+
+`mtah.stack.input_summary(probas, onsets)` summarises the stacker's inputs (quantiles of
+`pH − pA`, `|pH − pA|`, `pD`, onset; shares of confident frames; onset peaks per minute).
+`configs/stack_input_reference_lgb_v1.json` holds it for the external predictions of `lgb_v1`;
+running the same function on the frame model's target output shows whether the stacker sees
+inputs in the range it was fitted on. No labels are involved.
