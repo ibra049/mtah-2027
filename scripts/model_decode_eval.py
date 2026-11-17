@@ -59,7 +59,13 @@ def decode_all(name, sub, cfg, dec, use_aux):
     return dst, n
 
 
-def breakdown(dst, profiles=("nominal", "stoppage"), tau_s=None):
+def _seed_folders(dst, profile):
+    """<dst>/<profile>_<seed> folders of exactly this profile ("nominal" must not catch "nominal_lj")."""
+    return [d for d in dst.iterdir() if d.is_dir() and d.name.rsplit("_", 1)[0] == profile
+            and d.name.rsplit("_", 1)[1].isdigit()]
+
+
+def breakdown(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_lj"), tau_s=None):
     """Where the decoded possessions are lost, pooled over the 5 matches and both seeds, against
     the training label view: recall at IoU 0.5 by true possession length, and the share of true
     team changes / stops / restarts matched within 1 s (official matching code)."""
@@ -77,7 +83,7 @@ def breakdown(dst, profiles=("nominal", "stoppage"), tau_s=None):
         hit = np.zeros(len(names)); tot = np.zeros(len(names))
         tr = {"turn": [0, 0], "stop": [0, 0], "restart": [0, 0]}
         n_pred = n_gt = 0
-        for folder in sorted(dst.glob(f"{profile}_*")):
+        for folder in sorted(_seed_folders(dst, profile)):
             for mid in sorted({f.stem.split("_")[0] for f in folder.glob("*.npy")}):
                 if mid not in labels:
                     labels[mid] = [min_control(Sequence.load(cache_path(mid, per)).y, tau) for per in (1, 2)]
@@ -108,6 +114,54 @@ def breakdown(dst, profiles=("nominal", "stoppage"), tau_s=None):
               + "  ".join(f"{k} {a / max(b, 1):.2f} (n={b})" for k, (a, b) in tr.items()), flush=True)
 
 
+def profile_table(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_lj", "gapstress", "harsh")):
+    """Per degradation profile, pooled over matches and seeds: family score (mean over the label
+    views of the mean official spellF1 over matches), predicted against true dead share, and the
+    number of predicted dead runs that contain no true dead frame (over-calling stoppages)."""
+    from mtah.canonical import D, Sequence
+    from mtah.evaluate import report
+    from mtah.io_idsse import cache_path
+    from mtah.relabel import min_control
+    lab = json.loads((ROOT / "configs" / "labels.json").read_text())
+    taus = [float(x) for x in lab.get("eval_taus_s", [lab["min_control_tau_s"]])]
+    raw = {}
+    print(f"\n{dst.name}: per profile  (family = mean over views {taus} s; dead runs = per match, mean over seeds)")
+    print(f"{'profile':<13}{'family':>8}{'dead pred':>11}{'dead true':>11}{'dead runs':>11}{'true runs':>11}{'false runs':>12}{'matches':>9}")
+    out = {}
+    for profile in profiles:
+        fam, dp, dt, nr, ntr, nf = [], [], [], [], [], []
+        mids = sorted({f.stem.split("_")[0] for folder in _seed_folders(dst, profile) for f in folder.glob("*.npy")})
+        for mid in mids:
+            if mid not in raw:
+                raw[mid] = [Sequence.load(cache_path(mid, per)).y for per in (1, 2)]
+            per_seed = []
+            for folder in sorted(_seed_folders(dst, profile)):
+                files = [folder / f"{mid}_{per}.npy" for per in (1, 2)]
+                if not all(f.exists() for f in files):
+                    continue
+                preds = [np.load(f) for f in files]
+                f1 = float(np.mean([report([min_control(y, int(round(t * 25))) for y in raw[mid]], preds)["spell_f1_mean"]
+                                    for t in taus]))
+                runs = false = true_runs = 0
+                for y, pr in zip(raw[mid], preds):
+                    pd_ = np.r_[False, pr == D, False].astype(np.int8)
+                    st, en = np.flatnonzero(np.diff(pd_) == 1), np.flatnonzero(np.diff(pd_) == -1)
+                    runs += len(st)
+                    false += sum(1 for a, b in zip(st, en) if not (y[a:b] == D).any())
+                    td = np.r_[False, y == D, False].astype(np.int8)
+                    true_runs += int((np.diff(td) == 1).sum())
+                yy, pp = np.concatenate(raw[mid]), np.concatenate(preds)
+                per_seed.append((f1, float((pp == D).mean()), float((yy == D).mean()), runs, true_runs, false))
+            if per_seed:
+                a = np.mean(per_seed, axis=0)
+                fam.append(a[0]); dp.append(a[1]); dt.append(a[2]); nr.append(a[3]); ntr.append(a[4]); nf.append(a[5])
+        if fam:
+            out[profile] = float(np.mean(fam))
+            print(f"{profile:<13}{np.mean(fam):>8.4f}{np.mean(dp):>11.3f}{np.mean(dt):>11.3f}{np.mean(nr):>11.1f}"
+                  f"{np.mean(ntr):>11.1f}{np.mean(nf):>12.1f}{len(fam):>9}", flush=True)
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--name", required=True)
@@ -130,6 +184,10 @@ def main(argv=None):
         roots.append(dst)
     for dst in roots:
         breakdown(dst)
+    tables = [profile_table(dst) for dst in roots]
+    if len(tables) == 2:
+        print("\ngain by profile (family, first minus second): "
+              + "  ".join(f"{k} {tables[0][k] - tables[1][k]:+.4f}" for k in tables[0] if k in tables[1]))
     cmd = [sys.executable, str(ROOT / "scripts" / "eval_external.py"), "--pred-root", str(roots[0])]
     if args.compare:
         cmd += ["--compare", str(roots[1])]

@@ -118,6 +118,9 @@ def main(argv=None):
                          "in every DFL fold's training set; each gets its own leave-one-out fold, "
                          "written to <name>/metrica/, so its files stay out-of-fold too")
     ap.add_argument("--no-write", action="store_true", help="metrics only, no prediction files")
+    ap.add_argument("--predict-threads", type=int, default=4,
+                    help="threads for the export's predictions (each row is still summed over the "
+                         "trees in the same order, so the files do not depend on it; checked in tests)")
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=JSON",
                     help="config overrides for experiments, e.g. rounds.change=0 stride=10 "
                          "'drop_features=[\"ctrl\"]'")
@@ -134,6 +137,7 @@ def main(argv=None):
         for part in parents:
             node = node.setdefault(part, {})
         node[leaf] = json.loads(val)
+    model.PREDICT_THREADS = args.predict_threads
     tau_s = json.loads((ROOT / "configs" / "labels.json").read_text())["min_control_tau_s"]
     tau = int(round(tau_s * FPS))
     train_draws, export_draws = parse_draws(args.train_draws), parse_draws(args.export_draws)
