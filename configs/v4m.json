@@ -1,0 +1,14 @@
+{
+  "_doc": "Candidate v4m (base only, for target readouts): lgb_v4m frame model (v4 configuration, feature version 4, with the three public Metrica sample games added to training) + frozen decoder configs/decoder.json, kickoff rule on.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {
+    "module": "mtah.model",
+    "artefact": "models/lgb_v4m"
+  },
+  "decoder": {
+    "module": "mtah.decode",
+    "cfg_path": "configs/decoder.json"
+  }
+}
