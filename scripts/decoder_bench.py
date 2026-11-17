@@ -10,6 +10,7 @@ matches are never read here.
     PYTHONPATH=src python scripts/decoder_bench.py compare --model lgb_v1 --a CFG_A --b CFG_B
     PYTHONPATH=src python scripts/decoder_bench.py export --model lgb_v1 --cfg CFG --name decoder_v1
     PYTHONPATH=src python scripts/decoder_bench.py synth  [--name synth_v1]
+    ... --split metrica   scores the Metrica sample games (preds/<model>/metrica/): a veto, never tuned on
 
 Probabilities: ~/mtah-external/preds/<model>/oof/<profile>_<seed>/<MATCH>_<P>.npz (`proba`
 float32 [T,3]; optional aux/<MATCH>_<P>.npz with float [T] arrays). Matches whose two halves are
@@ -44,7 +45,11 @@ from mtah.relabel import min_control
 EXT = Path.home() / "mtah-external"
 ROOT = Path(__file__).resolve().parents[1]
 OOF5 = ["J03WMX", "J03WN1", "J03WOH", "J03WOY", "J03WPY"]
-PROFILES = ("nominal", "harsh")
+METRICA = ["METRICA1", "METRICA2", "METRICA3"]      # second dev set (veto only, never tuned on)
+SPLITS = {"oof5": dict(matches=OOF5, sub="oof", cache="cache"),
+          "metrica": dict(matches=METRICA, sub="metrica", cache="cache_metrica")}
+CUR = dict(SPLITS["oof5"])                          # set from --split in main()
+PROFILES = ("nominal", "stoppage", "harsh")
 TAG_ROOT = "cache_tags_v2"       # simulated Smart Tagging with the target's window structure
 SEEDS = (0, 1)
 FPS = 25
@@ -56,13 +61,13 @@ def label_taus():
     return [float(t) for t in cfg["eval_taus_s"]], float(cfg["min_control_tau_s"])
 
 
-def load_labels(matches=OOF5):
-    """{match: [y_half1, y_half2]} raw DFL labels (only the label array is read)."""
+def load_labels(matches=None):
+    """{match: [y_half1, y_half2]} raw provider labels (only the label array is read)."""
     out = {}
-    for mid in matches:
+    for mid in matches or CUR["matches"]:
         halves = []
         for p in (1, 2):
-            with np.load(EXT / "cache" / f"{mid}_{p}.npz") as z:
+            with np.load(EXT / CUR["cache"] / f"{mid}_{p}.npz") as z:
                 halves.append(z["y"].astype(np.int8))
         out[mid] = halves
     return out
@@ -73,12 +78,13 @@ def label_views(raw, taus):
             for t in taus}
 
 
-def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=OOF5, tags=None):
+def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=None, tags=None):
     """{(profile, seed): {match: [(proba, aux, tags, ball) per half]}}, complete matches only."""
     data, missing = {}, []
+    matches = matches or CUR["matches"]
     for profile in profiles:
         for seed in seeds:
-            folder = EXT / "preds" / model / "oof" / f"{profile}_{seed}"
+            folder = EXT / "preds" / model / CUR["sub"] / f"{profile}_{seed}"
             got = {}
             for mid in matches:
                 files = [folder / f"{mid}_{p}.npz" for p in (1, 2)]
@@ -118,7 +124,7 @@ _FRAMES = {}
 
 def _frame_axis(mid, p):
     if (mid, p) not in _FRAMES:
-        with np.load(EXT / "cache" / f"{mid}_{p}.npz") as z:
+        with np.load(EXT / CUR["cache"] / f"{mid}_{p}.npz") as z:
             _FRAMES[(mid, p)] = z["frame"]
     return _FRAMES[(mid, p)]
 
@@ -256,23 +262,27 @@ def cmd_table(args):
     if missing:
         print(f"skipped (incomplete): {len(missing)} match-folders, e.g. {missing[:4]}")
     head = (f"{'variant':<16}" + "".join(f"{'t' + format(t, 'g'):>8}" for t in taus)
-            + f"{'family':>8}{'harsh':>8}{'pred/gt':>8}{'adF1':>7}{'lat_t':>6}{'lat_s':>6}{'lat_r':>6}"
-            + "  paired vs row above")
+            + f"{'family':>8}{'stopp.':>8}{'select':>8}{'harsh':>8}{'pred/gt':>8}{'adF1':>7}"
+            + f"{'lat_t':>6}{'lat_s':>6}{'lat_r':>6}  paired (select) vs row above")
     print(head)
     prev = None
     rows = [("baseline_smooth50", None)] + variants
     for name, cfg in rows:
         preds = baseline_preds("baseline_smooth50", data) if cfg is None else predict(cfg, data)
         fam, by_tau, by_match = family(score(preds, views, "nominal"))
+        sfam, _, s_match = family(score(preds, views, "stoppage"))
         hfam = family(score(preds, views, "harsh"))[0]
+        if s_match:                      # selection value: mean of the two dropout regimes
+            by_match = {m: (by_match[m] + s_match[m]) / 2 for m in by_match if m in s_match}
+        sel = float(np.mean(list(by_match.values())))
         d = detail(preds, views[primary], "nominal")
         verdict = adoption(by_match, prev) if prev is not None else ""
         print(f"{name:<16}" + "".join(f"{by_tau[t]:>8.4f}" for t in taus)
-              + f"{fam:>8.4f}{hfam:>8.4f}{d['pred/gt']:>8.2f}{d['aliveDeadF1']:>7.3f}"
+              + f"{fam:>8.4f}{sfam:>8.4f}{sel:>8.4f}{hfam:>8.4f}{d['pred/gt']:>8.2f}{d['aliveDeadF1']:>7.3f}"
               + f"{d['lat_turn']:>6.1f}{d['lat_stop']:>6.1f}{d['lat_restart']:>6.1f}  {verdict}",
               flush=True)
         prev = by_match
-    print("per-match family of the last row: "
+    print("per-match select of the last row: "
           + "  ".join(f"{m} {v:.4f}" for m, v in by_match.items()))
 
 
@@ -398,7 +408,7 @@ def cmd_stats(args):
     print(f"model={args.model} cfg={args.cfg or 'defaults'}; n = possessions per match (two halves)")
     print(f"{'match':<8}{'source':<16}" + "".join(f"{c:>9}" for c in cols) + f"{'n/90min':>9}")
     rows = {}
-    for mid in OOF5:
+    for mid in CUR["matches"]:
         entries = [(f"truth tau={t:g}", spell_stats(views[t][mid])) for t in taus]
         for profile in PROFILES:
             got = [spell_stats(preds[(profile, s)][mid]) for s in SEEDS
@@ -504,6 +514,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("table", "grid", "export", "stats"):
         sp = sub.add_parser(name)
+        sp.add_argument("--split", default="oof5", choices=list(SPLITS))
         sp.add_argument("--model", required=True)
         sp.add_argument("--cfg", default=None, help="decoder config json (default: built-in defaults)")
         sp.add_argument("--tags", default=None, help="simulated tag noise level (cache_tags/<level>)")
@@ -518,7 +529,9 @@ def main():
     sp.add_argument("--a", default=None, help="reference config: json string or path")
     sp.add_argument("--b", required=True, help="candidate config: json string or path")
     sp.add_argument("--tags", default=None)
+    sp.add_argument("--split", default="oof5", choices=list(SPLITS))
     args = ap.parse_args()
+    CUR.update(SPLITS[getattr(args, "split", "oof5")])
     return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth,
             "compare": cmd_compare, "stats": cmd_stats}[args.cmd](args)
 
