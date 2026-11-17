@@ -216,3 +216,35 @@ def cache_path(game, period):
 def load(game):
     """Cached canonical Sequences (written by scripts/metrica_labels.py --save)."""
     return [Sequence.load(cache_path(game, p)) for p in (1, 2)]
+
+
+# ------------------------------------------------------------------ player slots (event alignment)
+def player_slots(game, root=ROOT):
+    """{event player key: (side 'home'/'away', slot)} matching load_tracking's slot order.
+    Games 1/2: key = CSV column name ('Player11'); game 3: key = player id ('P3578')."""
+    d = root / f"Sample_Game_{game}"
+    out = {}
+    if game in (1, 2):
+        for side, fn in (("home", "Home_Team"), ("away", "Away_Team")):
+            cols = pd.read_csv(d / f"Sample_Game_{game}_RawTrackingData_{fn}.csv", skiprows=2, nrows=1).columns
+            for k, c in enumerate([c for c in cols if str(c).startswith("Player")]):
+                out[str(c)] = (side, k)
+        return out
+    meta = _epts_meta(root)
+    ps = {p for _, _, pl in meta["specs"] for p in pl}
+    home = sorted(p for p in ps if meta["team_of"][p] == meta["home_id"])
+    away = sorted(p for p in ps if meta["team_of"][p] != meta["home_id"])
+    return {p: ("home", k) for k, p in enumerate(home)} | {p: ("away", k) for k, p in enumerate(away)}
+
+
+def load_events_with_player(game, root=ROOT):
+    """load_events plus a 'player' column (key into player_slots)."""
+    ev = load_events(game, root)
+    d = root / f"Sample_Game_{game}"
+    if game in (1, 2):
+        raw = pd.read_csv(d / f"Sample_Game_{game}_RawEventsData.csv")
+        ev["player"] = raw["From"].fillna("").astype(str).str.replace(" ", "").values
+    else:
+        js = json.load(open(d / f"Sample_Game_{game}_events.json"))["data"]
+        ev["player"] = [(e.get("from") or {}).get("id") or "" for e in js]
+    return ev
