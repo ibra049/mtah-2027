@@ -117,6 +117,30 @@ number of dead-ball runs do not move.
 | DFL harsh | 0.6270 | 0.6438 (+0.017, 5/5) |
 | Metrica nominal / harsh | 0.7110 / 0.6592 | 0.7371 / 0.6878 (+0.026 / +0.029, 3/3) |
 
+### On `lgb_v4` (canonicalised inputs; eight degradation profiles)
+
+Stacker fitted on all 16 out-of-fold folders. DFL = leave-one-match-out, Metrica = all-match
+artefact. `_sm` are the smoothed, gap-filled draws closest to the target (veto set).
+
+| data | plain v4 | + probabilities only (`v4q`) | + probabilities and onset (`v4p`) |
+|---|---|---|---|
+| DFL select (nominal + stoppage) | 0.6781 | 0.6856 (+0.008, 4/5) | 0.6904 (+0.012, 4/5) |
+| DFL nominal_sm / stoppage_sm | 0.6498 / 0.6827 | +0.011 / +0.007 (5/5) | +0.015 / +0.018 (5/5) |
+| DFL harsh | 0.6307 | 0.6399 (+0.009, 5/5) | 0.6467 (+0.016, 5/5) |
+| Metrica select | 0.7359 | 0.7512 (+0.015, 3/3) | 0.7572 (+0.021, 3/3) |
+| Metrica nominal_sm / stoppage_sm | 0.6887 / 0.7313 | +0.015 / +0.025 (3/3) | +0.026 / +0.031 (3/3) |
+| Metrica gapstress | 0.7173 | 0.7352 (+0.018, 3/3) | 0.7455 (+0.028, 3/3) |
+
+Sensitivity of `v4p` to its onset input (Metrica games, gain over plain v4, onset multiplied
+before the stacker sees it): ×1 +0.021, ×0.5 +0.016, ×0.25 +0.003, ×0 −0.111. It beats the
+probabilities-only stacker only while the onset channel carries more than about half of its
+external strength, and below a quarter it does damage. The probabilities-only stacker has no
+such exposure.
+
+Against `lgb_v1` + probabilities-only stacker (`v1q`): `v4q` is +0.019 (nominal) and +0.015
+(harsh) on DFL and +0.035 to +0.048 on every Metrica draw; `v4p` +0.023 / +0.022 and +0.046 to
++0.058.
+
 ### Variants tried and rejected
 
 - **Possession-length sample weights** (short possessions weighted up to 4×): recall of 1–2 s
