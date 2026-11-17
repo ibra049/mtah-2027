@@ -88,6 +88,9 @@ def main():
                     help="proba: the frame model's own outputs only (no ball cues, no margin)")
     ap.add_argument("--no-onset", action="store_true",
                     help="leave out the team-change onset channel (probabilities only)")
+    ap.add_argument("--only-final", action="store_true",
+                    help="skip the leave-one-match-out pass (its files already exist) and fit only "
+                         "the all-match stacker for --metrica / --holdout / --save")
     ap.add_argument("--metrica", action="store_true")
     ap.add_argument("--holdout", action="store_true",
                     help="also write stacked predictions for the holdout matches (never scored here)")
@@ -144,7 +147,7 @@ def main():
                         shutil.copyfile(src, out.parent / "aux" / src.name)
 
     # 2. leave one match out
-    for held in OOF5:
+    for held in ([] if args.only_final else OOF5):
         X, y, w = table([m for m in OOF5 if m != held])
         booster = stack.fit(X, y, sign, cfg, weight=w)
         del X, y
@@ -173,6 +176,8 @@ def main():
             reg = model_stacked.write_regression(args.save)
             print(f"regression case written: {reg}", flush=True)
         print(f"all-match stacker done ({time.time() - t0:.0f}s)", flush=True)
+    if args.only_final and not (args.metrica or args.save or args.holdout):
+        return
     imp = booster.feature_importance("gain")
     top = np.argsort(-imp)[:15]
     print("top features by gain: " + ", ".join(f"{names[i]} {imp[i] / imp.sum():.3f}" for i in top))
