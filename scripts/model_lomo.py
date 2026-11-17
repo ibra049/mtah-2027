@@ -109,6 +109,10 @@ def main(argv=None):
     ap.add_argument("--train-draws", default=ALL_DRAWS)
     ap.add_argument("--export-draws", default=ALL_DRAWS)
     ap.add_argument("--no-final", action="store_true", help="skip the all-5 model and holdout files")
+    ap.add_argument("--extra-train", default="",
+                    help="comma list of extra training matches (e.g. METRICA1,METRICA2,METRICA3): "
+                         "in every DFL fold's training set; each gets its own leave-one-out fold, "
+                         "written to <name>/metrica/, so its files stay out-of-fold too")
     ap.add_argument("--no-write", action="store_true", help="metrics only, no prediction files")
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=JSON",
                     help="config overrides for experiments, e.g. rounds.change=0 stride=10 "
@@ -130,10 +134,19 @@ def main(argv=None):
     log = lambda *a: print(f"[{time.time() - t0:6.0f}s]", *a, flush=True)   # noqa: E731
 
     # 1. sampled training rows per match (features computed once per match/draw/half)
+    extra = [m for m in args.extra_train.split(",") if m]
+    pool = CV + extra
+
+    def there(match, profile, seed):
+        return all((EXT / "cache_deg" / profile / str(seed) / f"{match}_{per}.npz").exists()
+                   for per in (1, 2))
+
     rows, names = {}, None
-    for match in CV:
+    for match in pool:
         Xs, ys = [], []
         for di, (profile, seed) in enumerate(train_draws):
+            if not there(match, profile, seed):
+                continue
             for period in (1, 2):
                 seq = load_seq(profile, seed, match, period, tau)
                 X, y, n = model.sample(seq, cfg, draw=di)      # y: int8 [n,2] (label, change)
@@ -166,8 +179,8 @@ def main(argv=None):
     oof, curves = {}, {}
     for match in CV:
         curve = {}
-        art = model.fit_arrays([rows[m][0] for m in CV if m != match],
-                               [rows[m][1] for m in CV if m != match],
+        art = model.fit_arrays([rows[m][0] for m in pool if m != match],
+                               [rows[m][1] for m in pool if m != match],
                                names, cfg, valid=rows[match], log=curve)
         curves[match] = curve
         oof[match] = predict_match(art, match, "oof")
@@ -208,19 +221,40 @@ def main(argv=None):
         log(f"mean held-out curve {head}: best round {report['rounds_curve'][head]['best_round']} "
             f"({mean.min():.4f}), last {mean[-1]:.4f}")
 
-    # 4. final model on all 5 matches, holdout predictions written but not scored
+    # 3b. extra training matches: one leave-one-out fold each, so their files are out-of-fold
+    if extra:
+        res = {}
+        for match in extra:
+            art = model.fit_arrays([rows[m][0] for m in pool if m != match],
+                                   [rows[m][1] for m in pool if m != match], names, cfg)
+            res[match] = predict_match(art, match, "metrica",
+                                       [d for d in export_draws if there(match, *d)])
+            log(f"fold {match} (extra): rows {art['n_rows']}")
+        report["metrica"] = {}
+        for profile, seed in export_draws:
+            parts = [res[m][(profile, seed, per)] for m in extra for per in (1, 2)
+                     if (profile, seed, per) in res[m]]
+            if parts:
+                r = frame_metrics(np.concatenate([a[0] for a in parts]),
+                                  np.concatenate([a[1] for a in parts]),
+                                  np.concatenate([a[2] for a in parts]))
+                report["metrica"][f"{profile}_{seed}"] = r
+                log(f"OOF extra {profile}_{seed}: {fmt(r)}")
+
+    # 4. final model on every training match, holdout predictions written but not scored
     mdir = ROOT / "models" / args.name
     mdir.mkdir(parents=True, exist_ok=True)
     if not args.no_final:
-        art = model.fit_arrays([rows[m][0] for m in CV], [rows[m][1] for m in CV], names, cfg)
-        art["info"] = {"trained_on": CV, "train_draws": args.train_draws, "tau_s": tau_s,
+        art = model.fit_arrays([rows[m][0] for m in pool], [rows[m][1] for m in pool], names, cfg)
+        art["info"] = {"trained_on": pool, "train_draws": args.train_draws, "tau_s": tau_s,
                        "commit": report["commit"]}
         model.save(art, mdir)
         for match in HOLDOUT:
             predict_match(art, match, "holdout")
         log(f"final model saved to {mdir} ({sum(f.stat().st_size for f in mdir.glob('*.txt')) / 1e6:.1f} MB); "
             f"holdout predictions written, not scored")
-        report["metrica"] = predict_metrica(art, predict_match, export_draws, log)
+        if not extra:
+            report["metrica"] = predict_metrica(art, predict_match, export_draws, log)
     (mdir / "oof_report.json").write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
     log("done")
     return 0

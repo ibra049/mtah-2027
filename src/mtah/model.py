@@ -39,6 +39,8 @@ from .canonical import A, D, H, Sequence
 
 DEFAULT_CFG = Path(__file__).resolve().parents[2] / "configs" / "model.json"
 HEADS = ("dead", "team", "change")
+LEGACY_FEATURE_VERSION = 2          # artefacts saved before versions were recorded (lgb_v1, lgb_v2)
+REGRESS_FILE = "regress.npz"        # small fixed sequence + the artefact's predictions on it
 CHANGE_RADIUS = 3
 
 
@@ -63,6 +65,11 @@ def change_labels(y, radius=CHANGE_RADIUS) -> np.ndarray:
         idx = b + k
         out[idx[(idx >= 0) & (idx < len(y))]] = True
     return out
+
+
+def feature_version(cfg) -> int:
+    """Feature-set version a config trains with (default: the current one)."""
+    return int(cfg.get("feature_version", features.FEATURE_VERSION))
 
 
 def keep_names(names, cfg) -> list:
@@ -118,7 +125,7 @@ def sample(seq: Sequence, cfg: dict, draw: int = 0, X=None, names=None):
     swapped home<->away with probability cfg["swap_prob"].
     -> (X [n,F], Y int8 [n,3] = (label, team change within change_radius, densely sampled), names)."""
     if X is None:
-        X, names = features.compute(seq)
+        X, names = features.compute(seq, feature_version(cfg))
     rng = _rng(cfg, seq, draw)
     stride = int(cfg["stride"])
     near_stride = int(cfg.get("stride_near", stride))
@@ -191,7 +198,7 @@ def fit_arrays(X, Y, names, cfg, valid=None, log=None) -> dict:
         Y = np.concatenate(Y)
     if isinstance(X, (list, tuple)) and len(X) == 1:
         X = X[0]
-    art = {"names": list(names), "cfg": cfg, "n_rows": {}}
+    art = {"names": list(names), "cfg": cfg, "n_rows": {}, "feature_version": feature_version(cfg)}
     ds_params = {k: v for k, v in cfg["lgb"].items() if k in DATASET_KEYS}
     ds_params.update(feature_pre_filter=False, verbose=-1, seed=int(cfg["seed"]),
                      data_random_seed=int(cfg["seed"]) + 3, deterministic=True, force_row_wise=True,
@@ -264,34 +271,67 @@ def predict_proba_X(art, X, names) -> np.ndarray:
     return predict_X(art, X, names)[0]
 
 
+def _features(art, seq):
+    """The feature matrix in the version the artefact was trained with."""
+    return features.compute(seq, int(art.get("feature_version", LEGACY_FEATURE_VERSION)))
+
+
 def predict_proba(art, seq: Sequence) -> np.ndarray:
     """CONTRACT: float32 [T,3], columns (H, A, D), rows sum to 1."""
-    return predict_X(art, *features.compute(seq))[0]
+    return predict_X(art, *_features(art, seq))[0]
 
 
 def predict_aux(art, seq: Sequence) -> dict:
     """CONTRACT (optional): {"turn_onset": float32 [T]} = P(a direct team change lies within
     CHANGE_RADIUS frames). Empty if the artefact has no change head."""
-    return predict_X(art, *features.compute(seq))[1]
+    return predict_X(art, *_features(art, seq))[1]
 
 
 def predict_both(art, seq: Sequence):
     """(proba, aux) with one feature pass."""
-    return predict_X(art, *features.compute(seq))
+    return predict_X(art, *_features(art, seq))
 
 
 # ------------------------------------------------------------------ persistence
-def save(art, path) -> None:
+def save(art, path, regress_seq=None) -> None:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     heads = [h for h in HEADS if h in art]
     for head in heads:
         (path / f"{head}.txt").write_text(art[head].model_to_string())
     meta = {"names": art["names"], "names_hash": names_hash(art["names"]), "cfg": art["cfg"],
+            "feature_version": int(art.get("feature_version", LEGACY_FEATURE_VERSION)),
             "heads": heads, "change_radius": int(art["cfg"].get("change_radius", CHANGE_RADIUS)),
             "n_rows": art.get("n_rows", {}),
             "lightgbm": lgb.__version__, "info": art.get("info", {})}
     (path / "meta.json").write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
+    if regress_seq is not None:
+        write_regression(art, path, regress_seq)
+
+
+def write_regression(art, path, seq: Sequence) -> None:
+    """Store a small sequence and this artefact's predictions on it next to the model, so the
+    test suite can check that the code still reproduces them bit for bit."""
+    proba, aux = predict_both(art, seq)
+    with open(Path(path) / REGRESS_FILE, "wb") as fh:
+        np.savez_compressed(fh, ball=seq.ball, home=seq.home, away=seq.away, pitch=seq.pitch,
+                            frame=seq.frame, proba=proba,
+                            **{"aux__" + k: v for k, v in aux.items()})
+
+
+def check_regression(path) -> dict:
+    """Recompute the stored regression case. -> {"n": frames, "max_abs_diff": float, "equal": bool}."""
+    path = Path(path)
+    art = load(path)
+    with np.load(path / REGRESS_FILE) as z:
+        seq = Sequence("REGRESS", 1, z["frame"], z["ball"], z["home"], z["away"], z["pitch"],
+                       np.full(len(z["frame"]), -1, np.int8))
+        want = {"proba": z["proba"], **{k[5:]: z[k] for k in z.files if k.startswith("aux__")}}
+    proba, aux = predict_both(art, seq)
+    got = {"proba": proba, **aux}
+    diff = max(float(np.abs(got[k] - want[k]).max()) for k in want)
+    return {"n": len(seq), "max_abs_diff": diff,
+            "equal": all(np.array_equal(got[k], want[k]) for k in want)}
 
 
 def load_artefact(path, cfg=None) -> dict:
@@ -304,7 +344,8 @@ def load(path) -> dict:
     path = Path(path)
     meta = json.loads((path / "meta.json").read_text())
     art = {"names": meta["names"], "cfg": meta["cfg"], "n_rows": meta.get("n_rows", {}),
-           "info": meta.get("info", {})}
+           "info": meta.get("info", {}),
+           "feature_version": int(meta.get("feature_version", LEGACY_FEATURE_VERSION))}
     for head in meta["heads"]:
         art[head] = lgb.Booster(model_str=(path / f"{head}.txt").read_text())
     return art
