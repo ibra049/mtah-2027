@@ -24,6 +24,8 @@ import numpy as np
 
 from . import stack
 
+REGRESS_FILE = "regress.npz"     # refined probabilities on the base model's fixed sequence
+
 
 def sha256_file(path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -46,13 +48,18 @@ def load_artefact(path, cfg=None) -> dict:
     if sha256_file(path / "stack.txt") != meta["stack_sha256"]:
         raise ValueError(f"{path}/stack.txt does not match the hash in meta.json")
     names = (path / "features.txt").read_text().split("\n")[:-1]
-    base_path = Path(meta["base_artefact"])
-    if not base_path.is_absolute():
-        base_path = path.resolve().parents[1] / base_path          # relative to the repository
+    base_path = _base_path(path, meta)
     base_mod = importlib.import_module(meta["base_module"])
     base = base_mod.load_artefact(str(base_path), (cfg or {}).get("base_cfg"))
     return {"base_mod": base_mod, "base": base, "names": names, "meta": meta,
-            "booster": lgb.Booster(model_file=str(path / "stack.txt"))}
+            "base_path": base_path, "booster": lgb.Booster(model_file=str(path / "stack.txt"))}
+
+
+def _base_path(path, meta) -> Path:
+    base_path = Path(meta["base_artefact"])
+    if not base_path.is_absolute():
+        base_path = Path(path).resolve().parents[1] / base_path    # relative to the repository
+    return base_path
 
 
 def load(path) -> dict:
@@ -84,3 +91,34 @@ def predict_proba(art, seq) -> np.ndarray:
 
 def predict_aux(art, seq):
     return predict_both(art, seq)[1]
+
+
+# ------------------------------------------------------------------------ regression case
+def write_regression(path) -> dict:
+    """Store this artefact's refined probabilities on the base model's fixed regression sequence
+    (models/<base>/regress.npz) next to the stacker, so the test suite can check, without any
+    external data, that frame model + stacker still compute the same thing bit for bit."""
+    path = Path(path)
+    art = load_artefact(path)
+    seq = art["base_mod"].regression_input(art["base_path"])
+    refined, _ = predict_both(art, seq)
+    base_file = art["base_path"] / art["base_mod"].REGRESS_FILE
+    with open(path / REGRESS_FILE, "wb") as fh:
+        np.savez_compressed(fh, proba=refined, base_regress_sha256=np.array(sha256_file(base_file)))
+    return {"n": int(len(refined)), "sha256": hashlib.sha256(refined.tobytes()).hexdigest()}
+
+
+def check_regression(path) -> dict:
+    """Recompute the stored case. -> {"n", "equal", "max_abs_diff", "base_case_unchanged"}."""
+    path = Path(path)
+    art = load_artefact(path)
+    with np.load(path / REGRESS_FILE) as z:
+        want, base_sha = z["proba"], str(z["base_regress_sha256"])
+    seq = art["base_mod"].regression_input(art["base_path"])
+    got, _ = predict_both(art, seq)
+    same_shape = got.shape == want.shape
+    return {"n": int(len(got)),
+            "equal": bool(same_shape and np.array_equal(got, want)),
+            "max_abs_diff": float(np.abs(got - want).max()) if same_shape else float("inf"),
+            "base_case_unchanged":
+                sha256_file(art["base_path"] / art["base_mod"].REGRESS_FILE) == base_sha}
