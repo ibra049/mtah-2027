@@ -158,16 +158,69 @@ def test_control_events(seq, XN):
     assert agree.mean() > 0.85
 
 
-def test_kick_events_need_a_seen_velocity_jump(seq, XN):
-    X, names = XN
-    col = {n: X[:, i] for i, n in enumerate(names)}
-    obs = col["n_obs"] == 1
-    kick = col["d_kick"]
-    assert np.isnan(kick[~obs]).all()
-    ev = np.flatnonzero(obs & (kick != 0))
-    assert len(ev) > 0                                    # carriers change -> the ball jumps
-    assert (col["n_kink"][ev] > features.KICK_DV).all()
-    assert (np.fmin(col["h_d1"][ev], col["a_d1"][ev]) < features.KICK_RADIUS).all()
+def _kick_seq(hidden):
+    """Ball at rest next to a home player, kicked at frame 100, received by an away player at
+    frame 150 (8 m/s along x). hidden=True blanks the ball around the kick."""
+    T = 300
+    ball = np.zeros((T, 3), np.float32)
+    ball[:, 0] = np.clip((np.arange(T) - 100) * (8.0 / 25), 0, 16.0)
+    home = np.full((T, 3, 2), np.nan, np.float32)
+    away = np.full((T, 3, 2), np.nan, np.float32)
+    home[:, 0] = (-0.5, 0.3)
+    home[:, 1] = (-20.0, 10.0)
+    home[:, 2] = (-40.0, 0.0)
+    away[:, 0] = (16.5, -0.3)
+    away[:, 1] = (25.0, 12.0)
+    away[:, 2] = (45.0, 0.0)
+    if hidden:
+        ball[90:125] = np.nan
+    from mtah.canonical import Sequence
+    return Sequence("K", 1, np.arange(T, dtype=np.int64), ball, home, away,
+                    np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+
+
+def test_seen_touches():
+    s = _kick_seq(hidden=False)
+    X, names = features.compute(s)
+    col = dict(zip(names, X.T))
+    ev = features.touch_events(s.ball[:, :2], ~np.isnan(s.ball[:, 0]), s.home, s.away,
+                               np.linalg.norm(s.home - s.ball[:, None, :2], axis=2).min(1),
+                               np.linalg.norm(s.away - s.ball[:, None, :2], axis=2).min(1))
+    assert ev["s"].tolist() == [1.0, -1.0] and (ev["hid"] == 0).all()
+    assert abs(ev["t"][0] - 100) <= 2 and abs(ev["t"][1] - 150) <= 2
+    assert ev["mag"][0] == pytest.approx(8.0, abs=0.5)
+    k, r = int(ev["t"][0]), int(ev["t"][1])
+    # in flight: the last touch is home's, the next one away's; before the kick nothing behind
+    assert col["d_tch_last"][125] == 1 and col["d_tch_next"][125] == -1
+    assert col["n_tch_tlast"][125] == pytest.approx((125 - k) / 25, abs=1e-3)
+    assert col["n_tch_tnext"][125] == pytest.approx((r - 125) / 25, abs=1e-3)
+    assert col["d_tch_last"][50] == 0 and col["n_tch_tlast"][50] == features.T_CAP_S
+    assert col["d_tch_last2"][200] == 1 and col["d_tch_last"][200] == -1
+    assert col["n_tch_last_d"][125] == pytest.approx(np.hypot(0.5, 0.3), abs=0.3)
+    assert col["h_tch_p50"][k + 10] == 1 and col["a_tch_p50"][k + 10] == 0
+    assert col["a_tch_f50"][r - 10] == 1 and col["d_tch_f50"][r - 10] == -1
+    assert col["h_tch_p25"][k + 40] == 0 and col["h_tch_p125"][k + 40] == 1
+
+
+def test_hidden_touch_is_reconstructed_inside_the_gap():
+    s = _kick_seq(hidden=True)
+    obs = ~np.isnan(s.ball[:, 0])
+    dh = np.linalg.norm(s.home - s.ball[:, None, :2], axis=2).min(1)
+    da = np.linalg.norm(s.away - s.ball[:, None, :2], axis=2).min(1)
+    ev = features.touch_events(s.ball[:, :2], obs, s.home, s.away, dh, da)
+    hid = ev["hid"] == 1
+    assert hid.sum() == 1 and ev["s"][hid][0] == 1               # the kicker's team
+    assert abs(int(ev["t"][hid][0]) - 100) <= 2                  # at the true kick time
+    assert ev["d"][hid][0] == pytest.approx(np.hypot(0.5, 0.3), abs=0.3)
+    X, names = features.compute(s)
+    col = dict(zip(names, X.T))
+    assert col["d_tch_last"][130] == 1 and col["n_tch_last_hid"][130] == 1
+    # a ball that crosses a gap on a straight line was not touched
+    straight = _kick_seq(hidden=False)
+    straight.ball[110:140] = np.nan
+    obs2 = ~np.isnan(straight.ball[:, 0])
+    ev2 = features.touch_events(straight.ball[:, :2], obs2, straight.home, straight.away, dh, da)
+    assert (ev2["hid"] == 0).all()
 
 
 def test_regime_descriptors(seq, XN):

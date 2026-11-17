@@ -64,6 +64,7 @@ def test_sample_swaps_and_masks_unknown(train):
     X, names = features.compute(s)
     Xs, Y, _ = model.sample(s, CFG, draw=0, X=X, names=names)
     y = Y[:, 0]
+    assert Y.shape[1] == 3 and (Y[:, 2] == 0).all()        # no dense sampling configured
     assert (y >= 0).all() and len(y) == len(Xs) and 0 < len(y) <= len(s) // CFG["stride"] + 1
     nofl = dict(CFG, swap_prob=0.0)
     X0, Y0, _ = model.sample(s, nofl, draw=0, X=X, names=names)
@@ -152,3 +153,44 @@ def test_validation_curve_is_reported_not_used(train):
     assert set(log) == set(model.HEADS) and all(len(v) == 6 for v in log.values())
     for head in model.HEADS:
         np.testing.assert_array_equal(a[head].predict(Xv), b[head].predict(Xv))
+
+
+def test_near_change_mask():
+    y = np.array([2] * 5 + [0] * 20 + [1] * 4 + [0] * 20 + [2] * 5 + [1] * 3 + [2] * 3, np.int8)
+    m = model.near_change_mask(y, radius=3, short=6)
+    want = np.zeros(len(y), bool)
+    want[22:28] = True          # +-3 around the change at 25
+    want[25:29] = True          # the 4-frame away possession
+    want[26:32] = True          # +-3 around the change at 29
+    want[54:57] = True          # 3-frame possession between stoppages (no direct change)
+    np.testing.assert_array_equal(m, want)
+    assert not model.near_change_mask(np.array([0] * 50 + [2] * 10 + [1] * 50, np.int8), 5, 10).any()
+
+
+def test_dense_sampling_and_weights(train):
+    cfg = dict(CFG, stride=8, stride_near=2, near_radius=10, short_poss=20)
+    s = train[0]
+    X, names = features.compute(s)
+    Xs, Y, _ = model.sample(s, dict(cfg, swap_prob=0.0), draw=0, X=X, names=names)
+    base, _, _ = model.sample(s, dict(CFG, stride=8, swap_prob=0.0), draw=0, X=X, names=names)
+    near = model.near_change_mask(s.y, 10, 20)
+    assert len(Xs) > len(base) and near.any()
+    # the dense rows are exactly the near frames on the fine grid; the rest sit on the coarse one
+    n_near = int(Y[:, 2].sum())
+    assert abs(n_near - near.sum() / 2) <= 1 and abs((len(Y) - n_near) - (~near).sum() / 8) <= 1
+    w = model._head_weight("dead", Y, cfg)
+    assert set(np.unique(w)) == {0.25, 1.0} and (w[Y[:, 2] == 1] == 0.25).all()
+    assert model._head_weight("team", Y, cfg) is None
+    # weighted share of near rows ~= their share of all frames (unbiased for the dead head)
+    assert w[Y[:, 2] == 1].sum() / w.sum() == pytest.approx(near.mean(), abs=0.02)
+    art = model.fit([s, train[1]], dict(cfg, rounds={"dead": 5, "team": 5, "change": 5}))
+    assert set(model.HEADS) <= set(art)
+
+
+def test_change_radius_from_config(train):
+    y = train[0].y
+    assert model.change_labels(y, 5).sum() > model.change_labels(y, 3).sum()
+    cfg = dict(CFG, change_radius=5)
+    _, Y, _ = model.sample(train[0], cfg, draw=0)
+    _, Y3, _ = model.sample(train[0], CFG, draw=0)
+    assert Y[:, 1].sum() >= Y3[:, 1].sum()
