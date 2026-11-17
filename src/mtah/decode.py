@@ -13,7 +13,10 @@ Pipeline (cfg "method": "segment"; "argmax" and "smooth" are the simpler referen
   3. forced frames      `forced` int8 [T]: -1 free, otherwise the label that must be emitted.
   4. segment Viterbi    exact minimum-cost segmentation with a switch cost per transition
                         (`switch_cost`, or one penalty per transition type) and optional hard
-                        minimum durations (explicit-duration search, O(T)).
+                        minimum durations (explicit-duration search, O(T)). With `onset_gain`
+                        a team change is cheaper on frames where the model's onset output
+                        (`aux`) fires, so boundaries land on the onset and short possessions
+                        framed by two onsets survive.
   5. minimum dead       D runs shorter than `min_dead` go back to the team that had the ball.
   6. controlled poss.   `min_poss`: relabel.min_control applied to the decoded path -- an
                         opponent run counts as a change of possession only if it lasts that
@@ -99,9 +102,11 @@ DEFAULTS = {
     "prune_margin_poss": 0,       # ... merged if their mean margin (milli-nats/frame) is below
     "prune_len_dead": 0,
     "prune_margin_dead": 0,
+    "onset_gain": 0,              # percent; >0 makes a team change cheaper where aux[snap_key] fires
+    "onset_ref": 0.02,            # onset level at which a team change costs exactly pen_turn
     "snap_radius": 0,             # frames; move a team change to the aux onset peak within +/- r
     "snap_min_peak": 0.3,         # ... only if the peak probability reaches this
-    "snap_key": "turn_onset",     # name of the aux array used for snapping
+    "snap_key": "team_change",    # name of the aux array used for snapping
     "off_turn": 0,                # signed frames added to each boundary of that type
     "off_stop": 0,
     "off_restart": 0,
@@ -222,10 +227,12 @@ def segment_viterbi(cost, pen_turn, pen_stop, pen_restart, min_turn=1, min_resta
                     min_dead=1):
     """Exact minimum-cost labelling under transition penalties and minimum durations.
 
-    cost: int [T,3]. A possession entered from the other team lasts >= min_turn frames, one
-    entered from D >= min_restart, a D stretch >= min_dead. The first and the last segment of
-    the array are exempt (they are cut by the half, not by play). With all minima 1 this is the
-    plain 3-state Viterbi. Returns (labels int8 [T], total cost int).
+    cost: int [T,3]. pen_turn (H<->A), pen_stop (H/A->D) and pen_restart (D->H/A) are each an
+    int or an int sequence [T]; entry t is the cost of a transition whose new label starts at
+    frame t. A possession entered from the other team lasts >= min_turn frames, one entered
+    from D >= min_restart, a D stretch >= min_dead. The first and the last segment of the array
+    are exempt (they are cut by the half, not by play). With all minima 1 this is the plain
+    3-state Viterbi. Returns (labels int8 [T], total cost int).
 
     E_s(t): best cost over frames 0..t ending in a segment of s that is already long enough.
     S_k(t): best cost with a segment of entry type k starting exactly at t. Then
@@ -238,7 +245,7 @@ def segment_viterbi(cost, pen_turn, pen_stop, pen_restart, min_turn=1, min_resta
         return np.zeros(0, dtype=np.int8), 0
     cH, cA, cD = cost[:, H].tolist(), cost[:, A].tolist(), cost[:, D].tolist()
     PH, PA, PD = list(accumulate(cH)), list(accumulate(cA)), list(accumulate(cD))
-    pen_turn, pen_stop, pen_restart = int(pen_turn), int(pen_stop), int(pen_restart)
+    pT, pS, pR = _per_frame(pen_turn, T), _per_frame(pen_stop, T), _per_frame(pen_restart, T)
     mT, mR, mD = max(1, int(min_turn)), max(1, int(min_restart)), max(1, int(min_dead))
 
     StH, StA = [0] * T, [0] * T          # team segment starting at t, entered from the other team
@@ -251,15 +258,16 @@ def segment_viterbi(cost, pen_turn, pen_stop, pen_restart, min_turn=1, min_resta
 
     for t in range(1, T):
         h, a, d = cH[t], cA[t], cD[t]
-        StH[t] = EA + pen_turn + h
-        StA[t] = EH + pen_turn + a
-        v = ED + pen_restart
+        v = pT[t]
+        StH[t] = EA + v + h
+        StA[t] = EH + v + a
+        v = ED + pR[t]
         SrH[t] = v + h
         SrA[t] = v + a
         if EH <= EA:
-            SdD[t] = EH + pen_stop + d
+            SdD[t] = EH + pS[t] + d
         else:
-            SdD[t] = EA + pen_stop + d
+            SdD[t] = EA + pS[t] + d
             argD[t] = 1
         nH, nA, nD = EH + h, EA + a, ED + d
         t0 = t - mT + 1
@@ -335,14 +343,43 @@ def segment_viterbi(cost, pen_turn, pen_stop, pen_restart, min_turn=1, min_resta
     return np.frombuffer(bytes(out), dtype=np.int8).copy(), int(best)
 
 
+def _per_frame(pen, T) -> list:
+    if np.ndim(pen) == 0:
+        return [int(pen)] * T
+    pen = np.asarray(pen).astype(np.int64).tolist()
+    if len(pen) != T:
+        raise ValueError(f"per-frame transition cost must have length {T}, got {len(pen)}")
+    return pen
+
+
 def path_cost(labels, cost, pen_turn, pen_stop, pen_restart) -> int:
     """Total cost of a labelling under the model (emissions + transition penalties)."""
     labels = np.asarray(labels)
-    total = int(np.asarray(cost)[np.arange(len(labels)), labels].sum())
-    for p, q in zip(labels[:-1].tolist(), labels[1:].tolist()):
-        if p != q:
-            total += int(pen_stop if q == D else pen_restart if p == D else pen_turn)
+    T = len(labels)
+    pT, pS, pR = _per_frame(pen_turn, T), _per_frame(pen_stop, T), _per_frame(pen_restart, T)
+    total = int(np.asarray(cost)[np.arange(T), labels].sum())
+    lab = labels.tolist()
+    for t in range(1, T):
+        if lab[t] != lab[t - 1]:
+            total += pS[t] if lab[t] == D else pR[t] if lab[t - 1] == D else pT[t]
     return total
+
+
+def onset_turn_cost(onset, pen_turn, gain_pct, ref) -> np.ndarray:
+    """int64 [T] cost of a team change at each frame, given an onset probability.
+
+    onset[t] is the model's probability that the team changes near frame t. A transition costs
+    pen_turn where onset equals the reference level `ref`, less where the model sees a change
+    and more where it sees none:  pen_turn - gain * 1000 * ln(onset / ref), clipped to
+    [0, 3 * pen_turn]. gain_pct = 100 is the hazard-ratio form of an HMM with time-varying
+    transition probabilities; 0 switches it off. Integer arithmetic on the 1e-4 grid.
+    """
+    k, bad = quantise(np.stack([onset, onset, onset], axis=1))
+    kq = k[:, 0]
+    kref = int(np.clip(round(float(ref) * P_QUANT), 1, P_QUANT))
+    adj = (int(gain_pct) * (_LUT[kref] - _LUT[kq])) // 100
+    adj[bad] = 0
+    return np.clip(int(pen_turn) - adj, 0, 3 * int(pen_turn)).astype(np.int64)
 
 
 # ------------------------------------------------------------------------- post-processing
@@ -538,8 +575,9 @@ def decode(proba, seq=None, cfg=None, forced=None, aux=None) -> np.ndarray:
 
     seq     only used for seq.tags / seq.frame when cfg["tags"]["enabled"].
     forced  int8 [T], -1 = free, any other value = the label that frame must carry.
-    aux     optional dict of float [T] arrays from model.predict_aux; only read when
-            cfg["snap_radius"] > 0 (key cfg["snap_key"]). The decoder works without it.
+    aux     optional dict of float [T] arrays from model.predict_aux; aux[cfg["snap_key"]] (the
+            team-change onset probability) is read only when cfg["onset_gain"] > 0 or
+            cfg["snap_radius"] > 0. The decoder works without it.
     """
     cfg = resolve_cfg(cfg)
     T = len(proba)
@@ -559,16 +597,19 @@ def decode(proba, seq=None, cfg=None, forced=None, aux=None) -> np.ndarray:
         if forced is not None:
             for lab in (H, A, D):
                 cost[(forced >= 0) & (forced != lab), lab] += BIG
-        out, _ = segment_viterbi(cost, cfg["pen_turn"], cfg["pen_stop"], cfg["pen_restart"],
+        onset = aux.get(cfg["snap_key"]) if aux is not None else None
+        pen_turn = cfg["pen_turn"]
+        if int(cfg["onset_gain"]) > 0 and onset is not None:
+            pen_turn = onset_turn_cost(onset, pen_turn, cfg["onset_gain"], cfg["onset_ref"])
+        out, _ = segment_viterbi(cost, pen_turn, cfg["pen_stop"], cfg["pen_restart"],
                                  cfg["hard_min_turn"], cfg["hard_min_restart"],
                                  cfg["hard_min_dead"])
         out = absorb_dead(out, cfg["min_dead"], forced)
         if int(cfg["min_poss"]) > 1:
             out = min_control(out, int(cfg["min_poss"]))
         out = prune(out, cost, cfg, forced)
-        if int(cfg["snap_radius"]) > 0 and aux is not None and cfg["snap_key"] in aux:
-            out = snap_boundaries(out, aux[cfg["snap_key"]], cfg["snap_radius"],
-                                  float(cfg["snap_min_peak"]))
+        if int(cfg["snap_radius"]) > 0 and onset is not None:
+            out = snap_boundaries(out, onset, cfg["snap_radius"], float(cfg["snap_min_peak"]))
         out = shift_boundaries(out, cfg["off_turn"], cfg["off_stop"], cfg["off_restart"])
     else:
         raise ValueError(f"unknown decode method {method!r}")

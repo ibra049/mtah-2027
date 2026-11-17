@@ -56,6 +56,43 @@ def test_segment_viterbi_is_exact(seed):
     assert total == best
 
 
+@pytest.mark.parametrize("seed", range(40, 70))
+def test_segment_viterbi_is_exact_with_per_frame_transition_costs(seed):
+    rng = np.random.default_rng(seed)
+    T = int(rng.integers(2, 9))
+    cost = rng.integers(0, 12, size=(T, 3))
+    pens = [rng.integers(0, 8, size=T) for _ in range(3)]
+    mins = {"turn": int(rng.integers(1, 4)), "restart": int(rng.integers(1, 4)),
+            "dead": int(rng.integers(1, 4))}
+    labels, total = dec.segment_viterbi(cost, *pens, mins["turn"], mins["restart"], mins["dead"])
+    assert _feasible(labels, mins) and dec.path_cost(labels, cost, *pens) == total
+    assert total == min(dec.path_cost(np.array(c), cost, *pens)
+                        for c in itertools.product((H, A, D), repeat=T) if _feasible(c, mins))
+
+
+def test_onset_makes_a_team_change_cheaper_and_places_it():
+    # weak state evidence: the model drifts from H to A over 60 unsure frames
+    p = proba((100, SURE_H), (60, (0.36, 0.36, 0.28)), (100, SURE_A))
+    onset = np.full(260, 0.02)
+    onset[118:125] = 0.6                                   # the onset head sees the change at ~121
+    plain = dec.decode(p, None, CFG)
+    with_onset = dec.decode(p, None, dict(CFG, onset_gain=100), aux={"team_change": onset})
+    b = int(np.flatnonzero(with_onset == A)[0])
+    assert 118 <= b <= 124 and [lab for lab, _ in runs(with_onset)] == [H, A]
+    assert [lab for lab, _ in runs(plain)] == [H, A]
+    np.testing.assert_array_equal(plain, dec.decode(p, None, dict(CFG, onset_gain=100)))   # no aux
+    # a 1.2 s opponent spell framed by two onsets survives a switch cost that would erase it
+    p = proba((150, SURE_H), (30, (0.33, 0.45, 0.22)), (150, SURE_H))
+    onset = np.full(330, 0.02)
+    onset[148:153] = onset[178:183] = 0.7
+    cfg = dict(CFG, switch_cost=6000, min_poss=19)
+    assert runs(dec.decode(p, None, cfg)) == [(H, 330)]
+    out = dec.decode(p, None, dict(cfg, onset_gain=100), aux={"team_change": onset})
+    assert [lab for lab, _ in runs(out)] == [H, A, H]
+    pen = dec.onset_turn_cost(np.array([0.02, 0.6, 0.0001, np.nan]), 4000, 100, 0.02)
+    assert pen.tolist() == [4000, 4000 - 3401, 9298, 4000]
+
+
 def test_plain_viterbi_when_minima_are_one():
     rng = np.random.default_rng(7)
     cost = rng.integers(0, 3000, size=(400, 3))
@@ -242,7 +279,7 @@ def test_snap_moves_team_changes_to_the_onset_peak_only():
     assert runs(dec.snap_boundaries(y, onset, 5, 0.3)) == runs(y)               # peak too far
     p = proba((100, SURE_H), (100, SURE_A), (50, SURE_D), (50, SURE_H))
     cfg = dict(CFG, snap_radius=12)
-    assert runs(dec.decode(p, None, cfg, aux={"turn_onset": onset})) == runs(out)
+    assert runs(dec.decode(p, None, cfg, aux={"team_change": onset})) == runs(out)
     assert runs(dec.decode(p, None, cfg)) == runs(y)                   # works without aux
     assert runs(dec.decode(p, None, cfg, aux={"other": onset})) == runs(y)
 
