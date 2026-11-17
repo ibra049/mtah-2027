@@ -99,12 +99,14 @@ def compare(target, reference):
 def report_lines(target_stats, ref):
     """Aggregate-only lines (safe to print behind SAFE|)."""
     lines, close = [], {}
+    # run_target.sh echoes at most 80 SAFE lines: per profile 1 header + `top` features, + 1 final
+    top = min(TOP, 79 // max(len(ref["profiles"]), 1) - 1)
     for prof in ref["profiles"]:
         c = compare(target_stats, ref["profiles"][prof])
         close[prof] = c["median_abs_shift"]
         lines.append(f"drift profile={prof} features={c['n']} median_outside_5_95={c['n_outside']} "
                      f"median_abs_shift={c['median_abs_shift']:.2f}")
-        for i, r in enumerate(c["rows"][:TOP], 1):
+        for i, r in enumerate(c["rows"][:top], 1):
             sh = "nan" if not np.isfinite(r["shift"]) else f"{r['shift']:+.2f}"
             lines.append(f"drift profile={prof} rank={i} feature={r['feature']} shift={sh} "
                          f"nan_diff={r['nan_diff']:+.2f} outside={int(r['outside'])}")
