@@ -89,13 +89,17 @@ def _wmax(x, lo, hi):
     return out
 
 
-def features(proba, onset, seq=None, use_cues=True):
+def features(proba, onset, seq=None, use_cues=True, use_onset=True):
     """-> (X float32 [T,F], names, sign int8 [F]); sign is -1 for antisymmetric columns.
 
     use_cues=False builds the columns from the frame model's own outputs only (d, a, o): no
     ball-observed flag, no nearest-player margin, no time since/until the ball. That variant
     cannot see a tracking property the frame model did not already digest, so it transfers
     exactly as far as the frame model does; seq is then not needed.
+
+    use_onset=False also leaves out the team-change onset channel: only pH - pA and pH + pA
+    remain. For a frame model whose onset head is out of range on the target (it fires on touch
+    features that the target's tracking barely produces).
     """
     p = np.asarray(proba, dtype=np.float32)
     T = len(p)
@@ -108,7 +112,7 @@ def features(proba, onset, seq=None, use_cues=True):
         names.append(name)
         sign.append(s)
 
-    channels = [("d", d, -1), ("a", a, 1), ("o", o, 1)]
+    channels = [("d", d, -1), ("a", a, 1)] + ([("o", o, 1)] if use_onset else [])
     if use_cues:
         m, b, ts, tu = cues(seq)
         channels += [("m", m, -1), ("b", b, 1)]
@@ -121,10 +125,11 @@ def features(proba, onset, seq=None, use_cues=True):
         if use_cues:
             add(_wmean(m, lo, hi), f"m_mean[{lo},{hi}]", -1)
             add(_wmean(b, lo, hi), f"b_mean[{lo},{hi}]", 1)
-    add(_wmax(o, -12, -1), "o_max[-12,-1]")
-    add(_wmax(o, 0, 12), "o_max[0,12]")
-    add(_wmax(o, -37, -13), "o_max[-37,-13]")
-    add(_wmax(o, 13, 37), "o_max[13,37]")
+    if use_onset:
+        add(_wmax(o, -12, -1), "o_max[-12,-1]")
+        add(_wmax(o, 0, 12), "o_max[0,12]")
+        add(_wmax(o, -37, -13), "o_max[-37,-13]")
+        add(_wmax(o, 13, 37), "o_max[13,37]")
     if use_cues:
         add(ts, "since_ball")
         add(tu, "until_ball")
