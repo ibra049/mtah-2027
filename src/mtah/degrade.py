@@ -100,6 +100,32 @@ def _bisect(f, target, lo, hi, n=16):
     return 0.5 * (lo + hi)
 
 
+def ball_dropout_split(seq, rng, cfg):
+    """Stress profile on clean sources (DFL): two independent burst chains, one on alive frames
+    (alive_missing_frac, ball_gap_mean_s, usual crowd/aerial/speed hazard) and one on dead frames
+    (dead_missing_frac, ball_dead_gap_mean_s). Each is solved by bisection on its own frames."""
+    T = len(seq)
+    logit = _ball_hazard_logit(seq, cfg)
+    alive = np.isin(seq.y, (0, 1))
+    dead = seq.y == D
+    u1, u2, u3, u4 = rng.random(T), rng.random(T), rng.random(T), rng.random(T)
+    pa = 1.0 / (cfg["ball_gap_mean_s"] * FPS)
+    pd = 1.0 / (cfg["ball_dead_gap_mean_s"] * FPS)
+
+    def run_a(b):
+        return _gilbert(u1, u2, np.where(alive, np.minimum(np.exp(b + logit), 1.0), 0.0), pa)
+
+    def run_d(b):
+        return _gilbert(u3, u4, np.where(dead, min(np.exp(b), 1.0), 0.0), pd)
+
+    miss = np.zeros(T, bool)
+    if alive.any():
+        miss |= run_a(_bisect(lambda b: run_a(b)[alive].mean(), cfg["alive_missing_frac"], -12.0, 2.0, n=18))
+    if dead.any():
+        miss |= run_d(_bisect(lambda b: run_d(b)[dead].mean(), cfg["dead_missing_frac"], -12.0, 2.0, n=18))
+    return miss
+
+
 def ball_dropout_alive(seq, rng, cfg):
     """For sources whose clean ball is already missing in stoppages (Metrica sample): keep those
     gaps, and solve the base hazard so the missing share over ALIVE frames (y in H/A), counting
@@ -314,7 +340,12 @@ def wrong_team(home, away, rng, cfg):
 # ---------------------------------------------------------------- entry point
 def apply(seq: Sequence, rng: np.random.Generator, cfg: dict) -> Sequence:
     out = seq.copy()
-    miss = ball_dropout_alive(seq, rng, cfg) if cfg.get("ball_target_alive") else ball_dropout(seq, rng, cfg)
+    if cfg.get("ball_target_alive"):
+        miss = ball_dropout_alive(seq, rng, cfg)
+    elif cfg.get("ball_split"):
+        miss = ball_dropout_split(seq, rng, cfg)
+    else:
+        miss = ball_dropout(seq, rng, cfg)
     ball = seq.ball.copy()
     ball[:, :2] += _ar1((len(seq), 2), rng, cfg["ball_jitter_m"], cfg["jitter_rho"])
     ball[miss] = np.nan

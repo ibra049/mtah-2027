@@ -234,7 +234,7 @@
       }
     },
     "gapstress": {
-      "_doc": "STRESS TEST, not a documented-facts profile (captain 2026-11-17): the tracker loses the ball in stoppages AND alive play has more and longer gaps (alive missing 25-40%, gap mean 3-5 s, geometric tail beyond 10 s). Overall missing is ABOVE the documented 40.7% by design. Built for the Metrica games only (their clean data already lacks the ball in ~98% of dead frames; alive dropout added on top). Question it answers: does a model/decoder call long alive-play ball gaps 'dead'?",
+      "_doc": "STRESS TEST, not a documented-facts profile (captain 2026-11-17): the tracker loses the ball in stoppages AND alive play has more and longer gaps (alive missing 25-40%, gap mean 3-5 s, geometric tail beyond 10 s). Overall missing is ABOVE the documented 40.7% by design. Metrica: provider dead-ball gaps kept (~98% of dead frames), alive dropout added on top. DFL (clean ball in stoppages): two chains, alive (alive_missing_frac, 3-5 s gaps) and dead (dead_missing_frac 0.8-0.98, 10-40 s gaps). Question it answers: does a model/decoder call long alive-play ball gaps 'dead'?",
       "overrides": {},
       "randomize": {
         "ball_gap_mean_s": [
@@ -288,6 +288,14 @@
         "alive_missing_frac": [
           0.25,
           0.4
+        ],
+        "dead_missing_frac": [
+          0.8,
+          0.98
+        ],
+        "ball_dead_gap_mean_s": [
+          10.0,
+          40.0
         ]
       },
       "randomize_log": {}

@@ -21,6 +21,9 @@ ALL_MATCHES = sum(io_idsse.SPLITS.values(), [])
 
 def _dropout_note(metrica, profile):
     if not metrica:
+        if profile == "gapstress":
+            return ("STRESS TEST: alive dropout drawn 25-40% with 3-5 s gaps, dead dropout 80-98% with 10-40 s gaps; "
+                    "overall missing ABOVE the documented 40.7% by design")
         return "overall missing = ball_missing_frac; dead/alive ratio drawn"
     if profile == "gapstress":
         return ("STRESS TEST: provider dead-ball gaps kept; alive dropout drawn 25-40% with 3-5 s gaps; "
@@ -39,11 +42,11 @@ def build(profile, seed, match_id, period, force=False):
         return None
     t = time.time()
     metrica = match_id.startswith("METRICA")
-    if profile == "gapstress" and not metrica:
-        raise SystemExit("gapstress is built for the Metrica games only (see configs/degrade.json)")
     src = io_metrica.cache_path(int(match_id[7:]), period) if metrica else io_idsse.cache_path(match_id, period)
     seq = io_idsse.Sequence.load(src)
     cfg = degrade.load_profile(profile)
+    if profile == "gapstress" and not metrica:
+        cfg["ball_split"] = True     # DFL: separate alive / dead dropout chains
     if metrica:
         # Metrica sample tracking already lacks the ball in stoppages: keep it; dropout on top is
         # solved on ALIVE frames to ball_missing_frac. The dead/alive ratio is not controlled.
