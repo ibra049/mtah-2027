@@ -145,6 +145,19 @@ def audit(seq, canon=None) -> dict:
         g6[f"{tag}_pm_obs"] = (n - nh) / obs_min
         g6[f"{tag}_hid_share"] = nh / n if n else float("nan")
     out["g6"] = g6
+    # g7: the feature-version-4 detector on the (canonicalised) track, when it exists
+    if canon is not None and hasattr(features, "touch_events_v4"):
+        ev = features.touch_events_v4(seq)
+        stream = np.asarray(ev.get("stream", np.zeros(len(ev["t"]))))
+        hid = np.asarray(ev.get("hid", np.zeros(len(ev["t"]))))
+        g7 = {}
+        for k, name in ((0, "v4s"), (1, "v4k")):
+            sel = stream == k
+            n, nh = int(sel.sum()), int((sel & (hid > 0)).sum())
+            g7[f"{name}_pm"] = n / minutes
+            g7[f"{name}_pm_obs"] = (n - nh) / obs_min
+            g7[f"{name}_hid_share"] = nh / n if n else float("nan")
+        out["g7"] = g7
     return out
 
 
