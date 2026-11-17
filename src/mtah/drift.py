@@ -36,12 +36,25 @@ def model_names(meta=MODEL_META):
     return json.loads(Path(meta).read_text())["names"]
 
 
-def feature_matrix(seqs, names, stride=STRIDE):
-    """Stack features of the given sequences, every `stride`-th frame, columns in `names` order."""
+def model_feature_version(meta=MODEL_META):
+    """Feature-set version the model was trained with (meta.json), as mtah.model resolves it."""
+    from .model import LEGACY_FEATURE_VERSION
+    return int(json.loads(Path(meta).read_text()).get("feature_version", LEGACY_FEATURE_VERSION))
+
+
+def ref_version(ref):
+    """References built before versions were recorded are feature version 2 (lgb_v1, lgb_v2)."""
+    from .model import LEGACY_FEATURE_VERSION
+    return int(ref.get("feature_version", LEGACY_FEATURE_VERSION))
+
+
+def feature_matrix(seqs, names, stride=STRIDE, version=None):
+    """Stack features of the given sequences, every `stride`-th frame, columns in `names` order,
+    computed with the given feature-set version (None: the code's current default)."""
     from .features import compute
     out = []
     for s in seqs:
-        X, nm = compute(s)
+        X, nm = compute(s) if version is None else compute(s, version)
         idx = [nm.index(n) for n in names]
         out.append(X[::stride][:, idx])
         del X
@@ -109,10 +122,11 @@ def _external_seqs(profile):
 
 def build_reference(names=None, meta=MODEL_META, ref=REF, profiles=PROFILES):
     names = names or model_names(meta)
-    out = {"names": names, "stride": STRIDE, "matches": OOF5, "seeds": [0, 1], "quantiles": list(QS),
-           "model_meta": str(meta), "profiles": {}}
+    version = model_feature_version(meta)
+    out = {"names": names, "feature_version": version, "stride": STRIDE, "matches": OOF5, "seeds": [0, 1],
+           "quantiles": list(QS), "model_meta": str(meta), "profiles": {}}
     for prof in profiles:
-        X = feature_matrix(_external_seqs(prof), names)
+        X = feature_matrix(_external_seqs(prof), names, version=version)
         out["profiles"][prof] = stats_from_matrix(X, names)
         print(f"reference {prof}: rows={len(X)} features={len(names)}", flush=True)
         del X
@@ -122,7 +136,8 @@ def build_reference(names=None, meta=MODEL_META, ref=REF, profiles=PROFILES):
 
 def check_external(profile, ref_path=REF):
     ref = json.loads(Path(ref_path).read_text())
-    st = stats_from_matrix(feature_matrix(_external_seqs(profile), ref["names"]), ref["names"])
+    st = stats_from_matrix(feature_matrix(_external_seqs(profile), ref["names"], version=ref_version(ref)),
+                           ref["names"])
     for line in report_lines(st, ref):
         print(line)
 
@@ -131,7 +146,7 @@ def target_main(data_dir, ref_path=REF):
     from . import io_target
     ref = json.loads(Path(ref_path).read_text())
     seqs = io_target.load(data_dir, with_tags=False)
-    st = stats_from_matrix(feature_matrix(seqs, ref["names"]), ref["names"])
+    st = stats_from_matrix(feature_matrix(seqs, ref["names"], version=ref_version(ref)), ref["names"])
     del seqs
     for line in report_lines(st, ref):
         print("SAFE| " + line, flush=True)
