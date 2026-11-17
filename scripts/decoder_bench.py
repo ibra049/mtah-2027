@@ -368,21 +368,74 @@ def cmd_compare(args):
     """Paired adoption rule for config B against config A, per profile."""
     taus, primary = label_taus()
     data, _ = load_source(args.model, tags=args.tags)
+    model_b = args.model_b or args.model
+    data_b = data if model_b == args.model else load_source(model_b, tags=args.tags)[0]
     views = label_views(load_labels(), taus)
     a, b = _cfg_arg(args.a), _cfg_arg(args.b)
-    pa, pb = predict(a, data), predict(b, data)
-    print(f"model={args.model} views={taus} tags={args.tags}\nA={json.dumps(a)}\nB={json.dumps(b)}")
+    pa, pb = predict(a, data), predict(b, data_b)
+    def brief(cfg):                      # only what differs from the built-in defaults
+        r = dec.resolve_cfg(cfg)
+        diff = {k: v for k, v in r.items() if k != "tags" and v != dec.DEFAULTS[k]
+                and not (k.startswith("pen_") and r["switch_cost"] is not None)}
+        tags = {k: v for k, v in r["tags"].items() if v != dec.DEFAULTS["tags"][k]}
+        return json.dumps(dict(diff, **({"tags": tags} if tags else {}))) if diff or tags else "defaults"
+
+    print(f"A: model={args.model} cfg={brief(a)}\nB: model={model_b} cfg={brief(b)}\n"
+          f"views={taus} tags={args.tags}")
+    per_profile = {}
     for profile in PROFILES:
         fa, ta, ma = family(score(pa, views, profile))
         fb, tb, mb = family(score(pb, views, profile))
-        if not ma:
+        if not ma or not mb:
             continue
+        per_profile[profile] = (ma, mb)
         print(f"{profile:<8} A {fa:.4f} [" + " ".join(f"{ta[t]:.4f}" for t in taus) + f"]  B {fb:.4f} ["
               + " ".join(f"{tb[t]:.4f}" for t in taus) + "]  per match "
-              + " ".join(f"{m[-3:]} {mb[m] - ma[m]:+.4f}" for m in ma) + f"  -> {adoption(mb, ma)}")
+              + " ".join(f"{m[-3:]} {mb[m] - ma[m]:+.4f}" for m in ma if m in mb) + f"  -> {adoption(mb, ma)}")
+    if "nominal" in per_profile and "stoppage" in per_profile:      # the team's selection value
+        (na, nb), (sa, sb) = per_profile["nominal"], per_profile["stoppage"]
+        ma = {m: (na[m] + sa[m]) / 2 for m in na if m in sa}
+        mb = {m: (nb[m] + sb[m]) / 2 for m in nb if m in sb}
+        print(f"{'select':<8} A {np.mean(list(ma.values())):.4f}  B {np.mean(list(mb.values())):.4f}  per match "
+              + " ".join(f"{m[-3:]} {mb[m] - ma[m]:+.4f}" for m in ma if m in mb) + f"  -> {adoption(mb, ma)}")
     da, db = detail(pa, views[primary]), detail(pb, views[primary])
     print("A " + " ".join(f"{k}={v:.3f}" for k, v in da.items()))
     print("B " + " ".join(f"{k}={v:.3f}" for k, v in db.items()))
+    for name, preds in (("A", pa), ("B", pb)):
+        print(f"{name} " + recall_by_length(preds, views[primary]))
+
+
+def recall_by_length(preds, labels, profile="nominal"):
+    """Recall at IoU 0.5 by true possession length, precision, and team-change matching."""
+    edges = ((0, 25, "<1s"), (25, 50, "1-2s"), (50, 125, "2-5s"), (125, 375, "5-15s"),
+             (375, 10 ** 9, ">15s"))
+    hit = {name: [0, 0] for _, _, name in edges}
+    tp = n_pred = turn_gt = turn_hit = turn_spur = 0
+    for (prof, seed), matches in preds.items():
+        if prof != profile:
+            continue
+        for mid, p in matches.items():
+            gt, pr = join_halves(labels[mid]), join_halves(p)
+            runs = pm.valid_runs(gt)
+            gs, ps = pm.possession_spells(gt, runs), pm.possession_spells(pr, runs)
+            flags = pm.matched_gt_flags(pm.spell_overlaps(gs, ps), len(gs), 0.5)
+            for (a, b, _), f in zip(gs, flags):
+                name = next(n for lo, hi, n in edges if lo <= b - a < hi)
+                hit[name][0] += int(f)
+                hit[name][1] += 1
+            tp += int(flags.sum())
+            n_pred += len(ps)
+            is_turn = lambda t: t[1] != D and t[2] != D          # noqa: E731
+            gtr = [t for t in pm.transitions(gt, runs) if is_turn(t)]
+            ptr = [t for t in pm.transitions(pr, runs) if is_turn(t)]
+            pairs, _, spurious = pm.match_transitions(gtr, ptr, 25)
+            turn_gt += len(gtr)
+            turn_hit += len(pairs)
+            turn_spur += len(spurious)
+    return ("recall@0.5 " + " ".join(f"{n}:{h / max(1, t):.2f}" for n, (h, t) in hit.items())
+            + f"  precision@0.5 {tp / max(1, n_pred):.2f}"
+            + f"  team changes matched<=1s {turn_hit / max(1, turn_gt):.2f}"
+            + f" spurious/true {turn_spur / max(1, turn_gt):.2f}")
 
 
 # ------------------------------------------------------------------------------------ stats
@@ -538,6 +591,7 @@ def main():
     sp.add_argument("--model", required=True)
     sp.add_argument("--a", default=None, help="reference config: json string or path")
     sp.add_argument("--b", required=True, help="candidate config: json string or path")
+    sp.add_argument("--model-b", default=None, help="model of B if different (model-vs-model)")
     sp.add_argument("--tags", default=None)
     sp.add_argument("--split", default="oof5", choices=list(SPLITS))
     for sp in sub.choices.values():
