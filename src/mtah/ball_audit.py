@@ -64,9 +64,11 @@ def _autocorr(v, k):
     return float(np.corrcoef(a[ok], b[ok])[0, 1])
 
 
-def audit(seq, canon=None) -> dict:
+def audit(seq, canon=None, with_nobs=False) -> dict:
     """canon: optional callable Sequence -> Sequence (e.g. features.canonicalize, feature
-    version 4) applied before every statistic, touches included."""
+    version 4) applied before every statistic, touches included. with_nobs: also the share of
+    frames where features.compute(seq, 4) has n_obs == 1 (slow: a full feature pass)."""
+    raw = seq if with_nobs else None
     if canon is not None:
         seq = canon(seq)
     T = len(seq)
@@ -151,13 +153,24 @@ def audit(seq, canon=None) -> dict:
         stream = np.asarray(ev.get("stream", np.zeros(len(ev["t"]))))
         hid = np.asarray(ev.get("hid", np.zeros(len(ev["t"]))))
         g7 = {}
+        if hasattr(features, "touch_thresholds"):
+            bc = np.asarray(seq.ball[:, :2], np.float32)
+            oc = ~np.isnan(bc).any(1)
+            thrs, scale = features.touch_thresholds(
+                features.ball_jump(bc, oc, features.V4_LAGS["touch"]))
+            g7.update(thr_s=thrs[0], thr_k=thrs[1], v4_scale=scale, obs_canon=oc.mean())
+        if raw is not None:
+            X, names = features.compute(raw, 4)
+            g7["n_obs_share"] = float(np.nanmean(X[:, names.index("n_obs")] == 1))
+        g7b = {}                              # separate line: SAFE lines must stay < 240 chars
         for k, name in ((0, "v4s"), (1, "v4k")):
             sel = stream == k
             n, nh = int(sel.sum()), int((sel & (hid > 0)).sum())
-            g7[f"{name}_pm"] = n / minutes
-            g7[f"{name}_pm_obs"] = (n - nh) / obs_min
-            g7[f"{name}_hid_share"] = nh / n if n else float("nan")
+            g7b[f"{name}_pm"] = n / minutes
+            g7b[f"{name}_pm_obs"] = (n - nh) / obs_min
+            g7b[f"{name}_hid"] = nh / n if n else float("nan")
         out["g7"] = g7
+        out["g7b"] = g7b
     return out
 
 
@@ -193,6 +206,8 @@ def main(argv=None):
     ap.add_argument("--external", action="store_true")
     ap.add_argument("--canon", default=None,
                     help="name of a canonicalisation callable in mtah.features, applied first")
+    ap.add_argument("--nobs", action="store_true",
+                    help="with --canon: share of frames where features.compute(seq, 4) has n_obs == 1")
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     a = ap.parse_args(argv)
     from mtah.player_audit import resolve_canon
@@ -202,13 +217,13 @@ def main(argv=None):
         from mtah import io_target
         for seq in io_target.load(a.data_dir, io_target.load_config(), dtype=np.float32,
                                   with_tags=False):
-            emit("target" + tag, seq.period, audit(seq, canon), prefix="SAFE| ")
+            emit("target" + tag, seq.period, audit(seq, canon, a.nobs), prefix="SAFE| ")
     if a.external:
         for src, half, path in external_sources():
             if not os.path.isfile(path):
                 print(f"src={src}{tag} half={half} missing=1")
                 continue
-            emit(src + tag, half, audit(Sequence.load(path), canon))
+            emit(src + tag, half, audit(Sequence.load(path), canon, a.nobs))
     return 0
 
 
