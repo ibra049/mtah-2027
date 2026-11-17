@@ -10,8 +10,9 @@ Layout: DIR/<profile>_<seed>/<MATCH>_<PERIOD>.npy, int8 [T] in {0=H, 1=A, 2=D}, 
 fixed degraded caches (~/mtah-external/cache_deg/<profile>/<seed>/). Profiles nominal and harsh,
 seeds 0 and 1; missing folders are skipped.
 
-Selection metric = MEAN of the `family` column: mean over label views of the mean spellF1 over the
-5 non-holdout matches (profile nominal, seeds averaged). With --compare it prints the paired gain
+Selection metric = MEAN of the `select` column: per match, the mean over label views of spellF1
+(`family`, profile nominal), averaged with the same on profile `stoppage` when present (the two
+plausible ball-dropout regimes); seeds averaged; mean over the 5 non-holdout matches. With --compare it prints the paired gain
 per match and the adoption verdict: mean gain >= +0.01 and non-negative on at least 4 of 5 matches.
 
 The holdout split is for the captain, once, on the locked candidate: --holdout --locked.
@@ -70,6 +71,7 @@ def table(pred_root, matches, seeds, taus, labels):
     if not nom[taus[0]]:
         raise SystemExit(f"no nominal predictions under {pred_root}")
     harsh = {t: score(pred_root, matches, "harsh", seeds, t, labels) for t in taus}
+    stop = {t: score(pred_root, matches, "stoppage", seeds, t, labels) for t in taus}
     mid_tau = taus[len(taus) // 2]
     rows = {}
     for mid in matches:
@@ -77,6 +79,10 @@ def table(pred_root, matches, seeds, taus, labels):
             continue
         row = {f"t{t:g}": nom[t][mid]["spellF1"] for t in taus}
         row["family"] = float(np.mean([nom[t][mid]["spellF1"] for t in taus]))
+        row["stoppage"] = (float(np.mean([stop[t][mid]["spellF1"] for t in taus]))
+                           if all(mid in stop[t] for t in taus) else float("nan"))
+        # selection value: mean over the two plausible ball-dropout regimes (see CONTRACT.md)
+        row["select"] = float(np.nanmean([row["family"], row["stoppage"]]))
         row["harsh"] = (float(np.mean([harsh[t][mid]["spellF1"] for t in taus]))
                         if all(mid in harsh[t] for t in taus) else float("nan"))
         ref = nom[mid_tau][mid]
@@ -124,15 +130,15 @@ def main():
           f"(pred/gt, macroF1, aliveDeadF1, lat25 at tau={taus[len(taus) // 2]:g}s)")
     rows = table(args.pred_root, matches, args.seeds, taus, labels)
     mean = show(args.pred_root, rows)
-    print(f"SELECTION METRIC (family mean, nominal): {mean['family']:.4f}")
+    print(f"SELECTION METRIC (mean of nominal and stoppage family scores): {mean['select']:.4f}")
     if args.compare:
         ref = table(args.compare, matches, args.seeds, taus, labels)
         show(args.compare, ref)
         common = [m for m in rows if m in ref]
-        gains = {m: rows[m]["family"] - ref[m]["family"] for m in common}
+        gains = {m: rows[m]["select"] - ref[m]["select"] for m in common}
         mean_gain = float(np.mean(list(gains.values())))
         nonneg = sum(g >= 0 for g in gains.values())
-        print("\npaired gain (family): " + "  ".join(f"{m} {g:+.4f}" for m, g in gains.items()))
+        print("\npaired gain (select): " + "  ".join(f"{m} {g:+.4f}" for m, g in gains.items()))
         ok = mean_gain >= 0.01 and nonneg >= min(4, len(common))
         print(f"mean gain {mean_gain:+.4f}, non-negative on {nonneg}/{len(common)} -> "
               f"{'ADOPT' if ok else 'DROP (rule: >= +0.01 mean and >= 4 of 5 non-negative)'}")
