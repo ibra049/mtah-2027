@@ -1,0 +1,14 @@
+{
+  "_doc": "Candidate v4mp: lgb_v4m frame model (v4 configuration with the three public Metrica sample games added to training) + temporal stacker on the frame model's own outputs (probabilities and team-change onset; no ball cues, no nearest-player margin) (mtah.model_stacked over models/lgb_v4m; stacker fitted on v4m's leave-one-match-out out-of-fold probabilities of the DFL matches only, docs/stacker.md) + frozen decoder, kickoff rule on.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {
+    "module": "mtah.model_stacked",
+    "artefact": "models/stack_lgb_v4mp"
+  },
+  "decoder": {
+    "module": "mtah.decode",
+    "cfg_path": "configs/decoder.json"
+  }
+}
