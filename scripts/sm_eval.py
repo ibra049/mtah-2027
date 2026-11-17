@@ -1,7 +1,7 @@
 """Candidates on the smoothed-ball profiles (Metrica games; external data only).
 
-Scores the shipped candidate configs (configs/v1.json, v2.json, v3.json: model artefact + the
-decoder cfg_path they name; the kickoff rule needs target tags and is not applied here) on the
+Scores shipped candidate configs (configs/<name>.json, run through mtah.predict.Components, i.e.
+the submission's assembly; the kickoff rule needs target tags and is not applied here) on the
 Metrica draws of the given profiles. Per profile and candidate: family spellF1 (views 0/0.5/1 s),
 predicted vs true dead share, spurious dead runs (predicted D runs touching no true D frame) and
 true possessions they cut. The smoothed draws are also split by the drawn ball sigma (low < 3
@@ -30,8 +30,10 @@ SIGMA_SPLIT = 3.0
 
 
 def candidate(name):
-    c = json.loads((REPO / "configs" / f"{name}.json").read_text())
-    return model.load(REPO / c["model"]["artefact"]), dec.resolve_cfg(REPO / c["decoder"]["cfg_path"])
+    """The submission's own assembly (mtah.predict.Components): plain, stacked and hybrid models
+    are run exactly as the final regeneration runs them (kickoff rule aside: no target tags)."""
+    from mtah.predict import Components
+    return Components(json.loads((REPO / "configs" / f"{name}.json").read_text()))
 
 
 def main():
@@ -51,9 +53,9 @@ def main():
                     sig = json.loads(f.with_suffix(".json").read_text())["drawn"].get("ball_smooth_sigma_f", 0.0)
                     y = truth[g][p]
                     cov = y >= 0
-                    for c, (art, cfg) in cands.items():
-                        proba, aux = model.predict_both(art, seq)
-                        pred = dec.decode(proba, None, cfg, None, aux)
+                    for c, comp in cands.items():
+                        pred, st = comp.predict_sequence(seq)
+                        assert st["proba_ok"] and st["decoded_valid"], (c, st)
                         f1 = [report([min_control(y, int(round(t * 25)))], [pred])["spell_f1_mean"] for t in ge.TAUS]
                         nsp, _, cut, _ = ge.dead_checks(y, pred)
                         rows.append((profile, c, sig, f1, float((pred[cov] == D).mean()), float((y[cov] == D).mean()), nsp, cut))
