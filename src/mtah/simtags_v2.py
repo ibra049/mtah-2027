@@ -32,9 +32,41 @@ def _offset_s(spec, rng):
     return float(rng.uniform(spec[1], spec[2]))
 
 
+def metrica_restart_records(seq):
+    """Restarts from the provider's own events (Metrica sample games): SET PIECE rows and goal
+    kicks (PASS ...GOAL KICK). Same record format as simtags.restart_records."""
+    from .io_metrica import load_events
+    ev = load_events(int(seq.match_id[7:]))
+    ev = ev[ev["period"] == int(seq.period)]
+    lo, hi = int(seq.frame[0]), int(seq.frame[-1])
+    recs, first = [], True
+    for _, e in ev.iterrows():
+        sub = e["subtype"]
+        if e["type"] == "SET PIECE":
+            if "KICK OFF" in sub:
+                typ = "Kick Off (Start)" if first else "Kick Off (After Goal)"
+            elif "THROW IN" in sub:
+                typ = "Throw-in"
+            elif "CORNER" in sub:
+                typ = "Corner Kick"
+            else:
+                typ = "Free Kick"          # FREE KICK, PENALTY
+        elif e["type"] == "PASS" and "GOAL KICK" in sub:
+            typ = "Goal Kick"
+        else:
+            continue
+        f = int(e["start"])
+        if not lo <= f <= hi:
+            continue
+        first = False
+        recs.append((f, typ, "N" if typ == "Throw-in" else e["team"], HALF[int(seq.period)]))
+    return recs
+
+
 def setpiece_tags(seq, cfg, noise, rng):
     fps = cfg["fps"]
-    recs = restart_records(seq, cfg_v1())
+    recs = (metrica_restart_records(seq) if seq.match_id.startswith("METRICA")
+            else restart_records(seq, cfg_v1()))
     keep_p = min(1.0, cfg["setpieces_per_half"] / max(1, len(recs))) if noise["sp_miss"] > 0 or noise["sp_false_pos"] > 0 else 1.0
     out = []
     for f, typ, team, half in recs:
