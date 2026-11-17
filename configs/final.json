@@ -1,11 +1,11 @@
 {
-  "_doc": "THE submission config (README: single regeneration command). Candidate v1: lgb_v1 frame model + frozen decoder (configs/decoder.json), kickoff rule on. Replaces the fallback (configs/fallback_baseline.json, official smooth50). The captain updates this file and the EXPECTED_SHA256 line in README.md in the same commit.",
+  "_doc": "THE submission config (README: single regeneration command). Candidate v1q: lgb_v1 frame model + temporal stacker on the frame model's probabilities only (models/stack_lgb_v1q; no onset channel, no ball cues) + frozen decoder (configs/decoder.json), kickoff rule on. Previous upload candidate: configs/v1.json (sha256 31839e5696ba1f6f1349abd711ba0176aa7a61be4fb8ed13f9dc32725ae1f4a1); fallback: configs/fallback_baseline.json. The captain updates this file and the EXPECTED_SHA256 lines in README.md and docs/UPLOAD_CHECKLIST.md in the same commit.",
   "method": "pipeline",
   "kickoff_rule": true,
   "use_aux": true,
   "model": {
-    "module": "mtah.model",
-    "artefact": "models/lgb_v1"
+    "module": "mtah.model_stacked",
+    "artefact": "models/stack_lgb_v1q"
   },
   "decoder": {
     "module": "mtah.decode",
