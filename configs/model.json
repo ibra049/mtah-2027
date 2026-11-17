@@ -2,14 +2,21 @@
   "_doc": "Frame model (mtah.model): two LightGBM heads on mtah.features. Every value is chosen on external data only (leave-one-match-out over the 5 non-holdout IDSSE matches); nothing is fitted to the target.",
   "seed": 20271117,
 
-  "_stride": "Train on every stride-th frame per sequence from a random phase. 25 fps frames are near-duplicates; six noise draws per match (nominal, stoppage, harsh x 2 seeds, each at its own phase) add more than denser sampling, and it keeps a fold within the 8 GB machine.",
-  "stride": 12,
+  "_stride": "Uniform rows: every stride-th frame per sequence from a random phase (25 fps frames are near-duplicates; six noise draws per match, each at its own phase, add more than denser sampling, and a fold stays within the 8 GB machine).",
+  "stride": 16,
+  "_stride_near": "Dense rows: every stride_near-th frame within near_radius frames of a direct team change or inside a possession shorter than short_poss frames. spellF1 scores possessions, and v1's errors sat there (team accuracy 0.55 within 6 frames of a change, 0.70 within 1 s, 0.98 beyond 3 s). The team head keeps this emphasis; the dead and change heads are weighted back to the frame distribution.",
+  "stride_near": 4,
+  "near_radius": 25,
+  "short_poss": 50,
+  "emphasis_heads": ["team"],
+  "_change_radius": "Positive window of the onset hint: a direct team change within this many frames (the decoder snaps to the peak).",
+  "change_radius": 5,
   "_swap_prob": "Each training row is exchanged home<->away with this probability (exact feature transform). Prediction averages both orientations, so the output is exactly team-symmetric.",
   "swap_prob": 0.5,
 
   "_lgb": "Conservative trees: frames of a match are correlated and the model must transfer across matches and to another tracking provider.",
   "lgb": {
-    "learning_rate": 0.05,
+    "learning_rate": 0.08,
     "num_leaves": 31,
     "min_data_in_leaf": 200,
     "feature_fraction": 0.5,
@@ -19,6 +26,6 @@
     "max_bin": 63,
     "num_threads": 4
   },
-  "_rounds": "Fixed boosting rounds per head (no early stopping inside a fold, so out-of-fold predictions never see their own match).",
-  "rounds": {"dead": 400, "team": 400, "change": 300}
+  "_rounds": "Fixed boosting rounds per head (no early stopping inside a fold, so out-of-fold predictions never see their own match). v1 (lr 0.05, 400 rounds) was still improving on every held-out curve at its last round.",
+  "rounds": {"dead": 500, "team": 500, "change": 300}
 }

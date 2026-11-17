@@ -4,8 +4,12 @@
     team head    P(H | alive)   trained on alive frames only
     P(H) = (1 - P(D)) * P(H|alive),  P(A) = (1 - P(D)) * (1 - P(H|alive)),  P(D) = P(D)
 
-    change head  P(a direct team change H<->A lies within CHANGE_RADIUS frames)  -> predict_aux,
-                 an optional hint the decoder may use to snap a change to its onset.
+    change head  P(a direct team change H<->A lies within cfg["change_radius"] frames)
+                 -> predict_aux, an optional hint the decoder may use to snap a change to its onset.
+
+Training rows are denser where possessions are decided (around team changes, inside short
+possessions): spellF1 counts possessions, not frames. The team head keeps that emphasis; the
+dead and change heads are re-weighted back to the frame distribution.
 
 Home/away symmetry is exact at prediction time: every head is evaluated on the frame and on its
 team-swapped twin (features.swap_features is an exact transform) and averaged, so
@@ -79,25 +83,59 @@ def _select(X, names, wanted):
     return X[:, [pos[n] for n in wanted]]
 
 
+def near_change_mask(y, radius, short) -> np.ndarray:
+    """bool [T]: frames that decide the possession count: within `radius` frames of a direct
+    team change, or inside a possession (H or A run) shorter than `short` frames."""
+    y = np.asarray(y)
+    T = len(y)
+    alive = (y == H) | (y == A)
+    out = np.zeros(T, bool)
+    b = np.flatnonzero(alive[1:] & alive[:-1] & (y[1:] != y[:-1])) + 1
+    if len(b) and radius > 0:
+        mark = np.zeros(T + 1, np.int64)
+        np.add.at(mark, np.clip(b - radius, 0, T), 1)
+        np.add.at(mark, np.clip(b + radius, 0, T), -1)
+        out |= np.cumsum(mark[:T]) > 0
+    edges = np.flatnonzero(np.diff(y) != 0) + 1
+    starts, ends = np.r_[0, edges], np.r_[edges, T]
+    for s0, e0 in zip(starts, ends):
+        if alive[s0] and e0 - s0 < short:
+            out[s0:e0] = True
+    return out
+
+
 def _rng(cfg, seq, draw):
     key = [int(cfg["seed"]), int(draw), int(seq.period)] + [ord(ch) for ch in seq.match_id]
     return np.random.default_rng(key)
 
 
 def sample(seq: Sequence, cfg: dict, draw: int = 0, X=None, names=None):
-    """Training rows of one sequence: every cfg["stride"]-th labelled frame from a random phase,
-    each swapped home<->away with probability cfg["swap_prob"].
-    -> (X [n,F], Y int8 [n,2] = (label, team change nearby), names)."""
+    """Training rows of one sequence.
+
+    Every cfg["stride"]-th labelled frame from a random phase, plus every cfg["stride_near"]-th
+    frame of the stretches that decide the possession count (near_change_mask: around team
+    changes and inside short possessions; "stride_near" must divide "stride"). Each row is
+    swapped home<->away with probability cfg["swap_prob"].
+    -> (X [n,F], Y int8 [n,3] = (label, team change within change_radius, densely sampled), names)."""
     if X is None:
         X, names = features.compute(seq)
     rng = _rng(cfg, seq, draw)
     stride = int(cfg["stride"])
-    rows = np.arange(int(rng.integers(0, stride)), len(seq), stride)
-    rows = rows[seq.y[rows] >= 0]
+    near_stride = int(cfg.get("stride_near", stride))
+    if stride % near_stride:
+        raise ValueError("stride_near must divide stride")
+    phase = int(rng.integers(0, stride))
+    t = np.arange(len(seq))
+    near = np.zeros(len(seq), bool)
+    if near_stride < stride:
+        near = near_change_mask(seq.y, int(cfg.get("near_radius", 25)), int(cfg.get("short_poss", 50)))
+    take = (t % stride == phase) | (near & (t % near_stride == phase % near_stride))
+    rows = np.flatnonzero(take & (seq.y >= 0))
     kept = keep_names(names, cfg)
     Xs = _select(X[rows], names, kept)
     names = kept
-    Y = np.stack([seq.y[rows], change_labels(seq.y)[rows]], 1).astype(np.int8)
+    change = change_labels(seq.y, int(cfg.get("change_radius", CHANGE_RADIUS)))
+    Y = np.stack([seq.y[rows], change[rows], near[rows]], 1).astype(np.int8)
     flip = rng.random(len(rows)) < float(cfg["swap_prob"])
     if flip.any():
         perm, sign = features.swap_plan(names)
@@ -105,6 +143,18 @@ def sample(seq: Sequence, cfg: dict, draw: int = 0, X=None, names=None):
         yf = Y[flip, 0]
         Y[flip, 0] = np.where(yf == H, A, np.where(yf == A, H, yf))
     return Xs, Y, names
+
+
+def _head_weight(head, Y, cfg):
+    """Row weights of one head. The dead and change heads undo the dense sampling (weights
+    proportional to 1 / sampling rate), so their probabilities stay calibrated to the frame
+    distribution. The team head keeps the emphasis: frames around team changes and in short
+    possessions count cfg["stride"] / cfg["stride_near"] times their share, because possessions,
+    not frames, are scored."""
+    if Y.shape[1] < 3 or head in cfg.get("emphasis_heads", ["team"]):
+        return None
+    ratio = float(cfg.get("stride_near", cfg["stride"])) / float(cfg["stride"])
+    return np.where(Y[:, 2] == 1, ratio, 1.0).astype(np.float32)
 
 
 def _params(cfg, head):
@@ -156,6 +206,8 @@ def fit_arrays(X, Y, names, cfg, valid=None, log=None) -> dict:
         idx, yh = _head_rows(head, Y)
         ds = base if idx is None else base.subset(idx).construct()
         ds.set_label(yh.astype(np.float32))
+        w = _head_weight(head, Y, cfg)
+        ds.set_weight(None if w is None else (w if idx is None else w[idx]))
         kw, evals = {}, {}
         if valid is not None and log is not None:
             Xv, Yv = valid
@@ -236,7 +288,8 @@ def save(art, path) -> None:
     for head in heads:
         (path / f"{head}.txt").write_text(art[head].model_to_string())
     meta = {"names": art["names"], "names_hash": names_hash(art["names"]), "cfg": art["cfg"],
-            "heads": heads, "change_radius": CHANGE_RADIUS, "n_rows": art.get("n_rows", {}),
+            "heads": heads, "change_radius": int(art["cfg"].get("change_radius", CHANGE_RADIUS)),
+            "n_rows": art.get("n_rows", {}),
             "lightgbm": lgb.__version__, "info": art.get("info", {})}
     (path / "meta.json").write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
 

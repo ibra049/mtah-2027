@@ -44,7 +44,11 @@ NEAR_RADII = (3.0, 8.0)
 WINDOWS = (12, 50, 150)             # past / future aggregates: 0.5 s, 2 s, 6 s
 VOTE_WINDOWS = (25, 50, 125, 250)   # centred "which team is nearest" vote, as the baseline
 CTRL_RADII = (1.5, 3.0)             # m; "exclusive control": one team within r of the seen ball, the other not
-KICK_RADIUS, KICK_DV = 3.0, 6.0     # m, m/s: velocity jump of the seen ball next to one team only
+TOUCH_M = 3                         # frames each side of a frame for the ball's velocity before / after it
+TOUCH_DV = 7.0                      # m/s: velocity jump that counts as a touch (pass, shot, reception, deflection)
+TOUCH_REACH = 2.5                   # m: the nearest player must be this close to a seen touch
+HIDDEN_REACH = 4.0                  # m: ... and this close to a touch reconstructed inside a ball gap
+TOUCH_COUNT_WINDOWS = (25, 50, 125)   # touches per team in the last / next 1, 2, 5 s
 EXTREME_WINDOW = 50
 REGIME_GAPS_S = (2, 4, 10)          # per-half share of ball-missing frames inside gaps at least this long
 DECIMALS = 4                        # features are rounded to 1e-4 (portability)
@@ -224,6 +228,122 @@ def _team_block(P, bi, vb, dirn, L, W):
     return f, aux
 
 
+def _nearest(P, q):
+    """Distance from each point q [n,2] to the nearest player of P [n,K,2]; inf if none."""
+    d = _norm(P - q[:, None, :])
+    return np.where(np.isnan(d), np.inf, d).min(1) if P.shape[1] else np.full(len(q), np.inf)
+
+
+def touch_events(ball, obs, home, away, dh, da):
+    """Touches read off the ball track. -> dict of arrays sorted by frame:
+    t (frame index), s (+1 home / -1 away), d (toucher's distance to the ball, m), od (the other
+    team's nearest distance), mag (velocity jump, m/s), hid (1 = reconstructed inside a gap).
+
+    Seen touch: the velocity over the TOUCH_M frames after a frame differs from the velocity
+    over the TOUCH_M frames before it by more than TOUCH_DV (local maximum), with a player within
+    TOUCH_REACH. dh / da: per-frame distance of the nearest home / away player to the ball.
+
+    Hidden touch: the ball enters a gap with velocity v0 at p0 and leaves it G seconds later with
+    velocity v1 at p1, and v0 and v1 differ by more than TOUCH_DV. One touch at time tau explains
+    it if p0 + v0*tau + v1*(G - tau) = p1; tau is the least-squares solution clipped to the gap,
+    the touch point is p0 + v0*tau, and the toucher is the nearest player to it at that frame
+    (within HIDDEN_REACH).
+    """
+    T = len(ball)
+    m = TOUCH_M
+    vbk = np.full((T, 2), np.nan, np.float32)       # velocity over the step ending at t
+    vfw = np.full((T, 2), np.nan, np.float32)       # velocity over the step starting at t
+    if T > m:
+        step = np.where((obs[m:] & obs[:-m])[:, None], (ball[m:] - ball[:-m]) * np.float32(FPS / m), np.nan)
+        vbk[m:] = step
+        vfw[:-m] = step
+    jump = _norm(vfw - vbk)
+    jf = np.where(np.isnan(jump), -1.0, jump)
+    peak = jf.copy()
+    for k in range(1, m + 1):
+        peak[k:] = np.maximum(peak[k:], jf[:-k])
+        peak[:-k] = np.maximum(peak[:-k], jf[k:])
+    dmin = np.fmin(dh, da)
+    seen = np.flatnonzero((jf >= peak) & (jf > TOUCH_DV) & (dmin < TOUCH_REACH))
+    ev = {"t": seen, "s": np.sign(da[seen] - dh[seen]), "d": dmin[seen],
+          "od": np.fmax(dh[seen], da[seen]), "mag": jf[seen], "hid": np.zeros(len(seen))}
+    # hidden touches, one candidate per interior gap
+    l = np.flatnonzero(obs[:-1] & ~obs[1:])          # last seen frame before a gap
+    if len(l):
+        seen_idx = np.flatnonzero(obs)
+        j = np.searchsorted(seen_idx, l, side="right")
+        ok = j < len(seen_idx)
+        l, n = l[ok], seen_idx[np.minimum(j, len(seen_idx) - 1)][ok]
+        G = (n - l).astype(np.float32) / FPS
+        v0, v1, p0, p1 = vbk[l], vfw[n], ball[l], ball[n]
+        dv = v0 - v1
+        mag = _norm(dv)
+        tau = ((p1 - p0 - v1 * G[:, None]) * dv).sum(1) / (mag * mag + np.float32(1e-6))
+        tau = np.clip(tau, 0.0, G)
+        q = p0 + v0 * tau[:, None]
+        tq = np.clip(l + np.rint(tau * FPS).astype(np.int64), l + 1, n - 1)
+        keep = np.flatnonzero(~np.isnan(mag) & (mag > TOUCH_DV) & (n - l >= 2))
+        tq, q, mag = tq[keep], q[keep], mag[keep]
+        qh, qa = _nearest(home[tq], q), _nearest(away[tq], q)
+        near = np.fmin(qh, qa) < HIDDEN_REACH
+        hid = {"t": tq[near], "s": np.sign(qa - qh)[near], "d": np.fmin(qh, qa)[near],
+               "od": np.fmax(qh, qa)[near], "mag": mag[near], "hid": np.ones(int(near.sum()))}
+        ev = {k: np.concatenate([ev[k], hid[k]]) for k in ev}
+    keep = ev["s"] != 0                                  # an exact tie names nobody
+    order = np.argsort(ev["t"][keep], kind="stable")
+    out = {k: v[keep][order] for k, v in ev.items()}
+    out["od"] = np.where(np.isinf(out["od"]), np.nan, out["od"])
+    return out
+
+
+def _team_event_clock(c, tag, hev, aev, t, T):
+    """Per-team time since the last / until the next event, their differences and signs."""
+    tl, tn = {}, {}
+    for side, e in (("h", hev), ("a", aev)):
+        lastc = np.maximum.accumulate(np.where(e, t, -1))
+        nextc = np.minimum.accumulate(np.where(e, t, T)[::-1])[::-1]
+        tl[side] = np.where(lastc >= 0, np.minimum((t - lastc) / FPS, T_CAP_S), T_CAP_S)
+        tn[side] = np.where(nextc < T, np.minimum((nextc - t) / FPS, T_CAP_S), T_CAP_S)
+        c[f"{side}_{tag}_tlast"] = tl[side]
+        c[f"{side}_{tag}_tnext"] = tn[side]
+    c[f"d_{tag}_tlast"] = tl["h"] - tl["a"]        # <0: home had it more recently
+    c[f"d_{tag}_tnext"] = tn["h"] - tn["a"]        # <0: home has it sooner
+    c[f"d_{tag}_last"] = np.sign(tl["a"] - tl["h"])
+    c[f"d_{tag}_next"] = np.sign(tn["a"] - tn["h"])
+    c[f"n_{tag}_tlast"] = np.minimum(tl["h"], tl["a"])
+    c[f"n_{tag}_tnext"] = np.minimum(tn["h"], tn["a"])
+
+
+def _touch_features(c, ev, t, T):
+    """Last / next touches seen from every frame, and touches per team in short windows."""
+    ne = len(ev["t"])
+    et = ev["t"].astype(np.int64)
+    j = np.searchsorted(et, t, side="right") - 1     # last touch at or before t
+    for name, idx in (("last", j), ("last2", j - 1), ("next", j + 1), ("next2", j + 2)):
+        ok = (idx >= 0) & (idx < ne)
+        k = np.clip(idx, 0, max(ne - 1, 0))
+        g = (lambda a, fill: np.where(ok, a[k], fill)) if ne else (lambda a, fill: np.full(T, fill))
+        c[f"d_tch_{name}"] = g(ev["s"], 0.0)
+        c[f"n_tch_t{name}"] = np.minimum(np.abs(g(et, 10 ** 9) - t) / FPS, T_CAP_S)
+        if name in ("last", "next"):
+            c[f"n_tch_{name}_d"] = g(ev["d"], np.nan)
+            c[f"n_tch_{name}_od"] = g(ev["od"], np.nan)
+            c[f"n_tch_{name}_mag"] = g(np.minimum(ev["mag"], 2 * BALL_SPEED_CAP), np.nan)
+            c[f"n_tch_{name}_hid"] = g(ev["hid"], np.nan)
+    hev = np.zeros(T, bool)
+    aev = np.zeros(T, bool)
+    hev[et[ev["s"] > 0]] = True
+    aev[et[ev["s"] < 0]] = True
+    _team_event_clock(c, "tch", hev, aev, t, T)
+    cs = {"h": np.concatenate([[0], np.cumsum(hev)]), "a": np.concatenate([[0], np.cumsum(aev)])}
+    for w in TOUCH_COUNT_WINDOWS:
+        for tag, a, b in ((f"p{w}", np.clip(t - w + 1, 0, T), t + 1),
+                          (f"f{w}", t + 1, np.clip(t + w + 1, 0, T))):
+            n = {side: (cs[side][b] - cs[side][a]).astype(np.float32) for side in "ha"}
+            c[f"h_tch_{tag}"], c[f"a_tch_{tag}"] = n["h"], n["a"]
+            c[f"d_tch_{tag}"] = n["h"] - n["a"]
+
+
 # paired features that also get an explicit h-minus-a column
 _DIFFS = ("d1", "d2", "c3", "c8", "sx", "sy", "sp_mean", "sp_med", "slow", "near_sp", "near_relv",
           "behind", "touch", "own_box", "opp_box", "ball_ahead")
@@ -326,42 +446,23 @@ def _compute(seq):
     closer = np.where(obs, closer, np.nan)
     c["d_closer"] = closer
 
-    # Exclusive events on the *seen* ball, and how long ago / how soon each team has one. They
-    # carry the possessor across ball gaps: the label follows the last team that had the ball,
-    # and an agreeing next one confirms it.
-    #   ctrl<r>  one team has a player within r metres of the ball, the other does not
-    #   kick     the same within KICK_RADIUS while the ball's velocity jumps (a pass, shot,
-    #            reception or deflection), measured on observed frames only
-    vraw = np.where((obs & np.roll(obs, BALL_LAG) & np.roll(obs, -BALL_LAG))[:, None], vb, np.nan)
-    kink = np.full(T, np.nan, np.float32)
-    if T > 2 * k:
-        kink[k:-k] = _norm(vraw[2 * k:] - vraw[:-2 * k])
-    c["n_kink"] = np.minimum(kink, 2 * BALL_SPEED_CAP)
-    events = [(f"ctrl{int(round(r * 10))}", obs & (fh["d1"] < r), obs & (fa["d1"] < r))
-              for r in CTRL_RADII]
-    hit = obs & (kink > KICK_DV)                   # NaN compares False
-    events.append(("kick", hit & (fh["d1"] < KICK_RADIUS), hit & (fa["d1"] < KICK_RADIUS)))
-    for tag, hin, ain in events:
+    # Exclusive control on the *seen* ball (one team has a player within r metres, the other
+    # does not) and how long ago / how soon each team has it. Carries the possessor across gaps.
+    for r in CTRL_RADII:
+        tag = f"ctrl{int(round(r * 10))}"
+        hin, ain = obs & (fh["d1"] < r), obs & (fa["d1"] < r)
         sig = np.where(obs, hin.astype(np.float32) - ain.astype(np.float32), np.nan)
         c[f"d_{tag}"] = sig
-        tl, tn = {}, {}
-        for side, ev in (("h", hin & ~ain), ("a", ain & ~hin)):
-            lastc = np.maximum.accumulate(np.where(ev, t, -1))
-            nextc = np.minimum.accumulate(np.where(ev, t, T)[::-1])[::-1]
-            tl[side] = np.where(lastc >= 0, np.minimum((t - lastc) / FPS, T_CAP_S), T_CAP_S)
-            tn[side] = np.where(nextc < T, np.minimum((nextc - t) / FPS, T_CAP_S), T_CAP_S)
-            c[f"{side}_{tag}_tlast"] = tl[side]
-            c[f"{side}_{tag}_tnext"] = tn[side]
-        c[f"d_{tag}_tlast"] = tl["h"] - tl["a"]        # <0: home had it more recently
-        c[f"d_{tag}_tnext"] = tn["h"] - tn["a"]        # <0: home has it sooner
-        c[f"d_{tag}_last"] = np.sign(tl["a"] - tl["h"])
-        c[f"d_{tag}_next"] = np.sign(tn["a"] - tn["h"])
-        c[f"n_{tag}_tlast"] = np.minimum(tl["h"], tl["a"])
-        c[f"n_{tag}_tnext"] = np.minimum(tn["h"], tn["a"])
+        _team_event_clock(c, tag, hin & ~ain, ain & ~hin, t, T)
         x = np.asarray(sig, np.float64)
         for wlen in WINDOWS:
             c[f"d_{tag}_p{wlen}"] = _win_mean(x, -wlen, -1)
             c[f"d_{tag}_f{wlen}"] = _win_mean(x, 1, wlen)
+
+    # Touches: under fine labels the truth is close to "team of the last controlled touch".
+    ev = touch_events(ball, obs, seq.home, seq.away,
+                      np.where(obs, fh["d1"], np.nan), np.where(obs, fa["d1"], np.nan))
+    _touch_features(c, ev, t, T)
 
     # last-seen / next-seen snapshots (equal to the current frame while the ball is seen)
     kb = BALL_LAG

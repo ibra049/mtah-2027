@@ -78,11 +78,12 @@ def predict_metrica(art, predict_match, export_draws, log):
     """All-5 model on the degraded Metrica sample games (never trained on). Frame metrics against
     the provider-semantics labels are printed for information; the team table scores them."""
     out = {}
-    have = [m for m in METRICA if all(
-        (EXT / "cache_deg" / p / str(k) / f"{m}_{per}.npz").exists()
-        for p, k in export_draws for per in (1, 2))]
-    res = {m: predict_match(art, m, "metrica") for m in have}
-    for profile, seed in export_draws:
+    def there(m, p, k):
+        return all((EXT / "cache_deg" / p / str(k) / f"{m}_{per}.npz").exists() for per in (1, 2))
+    draws = [d for d in export_draws if all(there(m, *d) for m in METRICA)]   # no stoppage profile
+    res = {m: predict_match(art, m, "metrica", draws) for m in METRICA} if draws else {}
+    have = list(res)
+    for profile, seed in draws:
         parts = [res[m][(profile, seed, per)] for m in have for per in (1, 2)]
         if parts:
             r = frame_metrics(np.concatenate([a[0] for a in parts]),
@@ -143,9 +144,9 @@ def main(argv=None):
         rows[match] = (np.concatenate(Xs), np.concatenate(ys))
         log(f"sampled {match}: {len(rows[match][1])} rows x {len(names)} features")
 
-    def predict_match(art, match, sub):
+    def predict_match(art, match, sub, draws=None):
         res = {}
-        for profile, seed in export_draws:
+        for profile, seed in (draws or export_draws):
             for period in (1, 2):
                 seq = load_seq(profile, seed, match, period, tau)
                 p, aux = model.predict_both(art, seq)
