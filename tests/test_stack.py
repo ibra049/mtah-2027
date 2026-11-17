@@ -62,3 +62,49 @@ def test_window_helpers_match_a_direct_loop():
         np.testing.assert_allclose(stack._wmean(x, lo, hi), ref_mean, atol=1e-6)
         ref_max = [x[np.clip(np.arange(t + lo, t + hi + 1), 0, 59)].max() for t in range(60)]
         np.testing.assert_allclose(stack._wmax(x, lo, hi), ref_max, atol=1e-6)
+
+
+# ------------------------------------------------------------------ pipeline wrapper
+def _fake_base(proba, onset):
+    import sys
+    import types
+    mod = types.ModuleType("fake_base_model")
+    mod.load_artefact = lambda path, cfg=None: {"path": path}
+    mod.predict_both = lambda art, seq: (proba, {"turn_onset": onset})
+    sys.modules["fake_base_model"] = mod
+
+
+def test_model_stacked_wraps_a_base_model(tmp_path):
+    import pytest
+    from mtah import model_stacked
+    proba, onset, seq = make(T=600, seed=5)
+    X, names, sign = stack.features(proba, onset, seq)
+    y = np.argmax(proba, axis=1)
+    booster = stack.fit(X, y, sign, {"num_boost_round": 5, "min_data_in_leaf": 5, "num_threads": 1})
+    art_dir = tmp_path / "models" / "stack_test"
+    art_dir.mkdir(parents=True)
+    booster.save_model(str(art_dir / "stack.txt"))
+    model_stacked.write_meta(art_dir, names, base_module="fake_base_model",
+                             base_artefact="models/base", onset_key="turn_onset")
+    _fake_base(proba, onset)
+    art = model_stacked.load_artefact(art_dir)
+    assert art["base"]["path"].endswith("models/base")           # resolved against the repo root
+    out, aux = model_stacked.predict_both(art, seq)
+    assert out.shape == (600, 3) and out.dtype == np.float32
+    assert np.allclose(out.sum(1), 1.0, atol=1e-5) and (out >= 0).all()
+    assert aux["turn_onset"] is onset                            # aux passes through untouched
+    np.testing.assert_array_equal(out, model_stacked.refine(art, proba, aux, seq))
+    np.testing.assert_array_equal(out, model_stacked.predict_proba(art, seq))
+    np.testing.assert_array_equal(out, stack.predict_proba(booster, X))
+    # home/away swap of the whole input swaps the H and A outputs (up to tree asymmetry: the
+    # symmetric predictor is exact)
+    sym = stack.predict_proba(booster, X, sign, symmetric=True)
+    sym_sw = stack.predict_proba(booster, stack.swap(X, sign), sign, symmetric=True)
+    np.testing.assert_allclose(sym_sw, sym[:, [A, H, 2]], atol=1e-6)
+    # a changed booster file or feature list is refused
+    art["names"] = names[:-1]
+    with pytest.raises(ValueError):
+        model_stacked.refine(art, proba, aux, seq)
+    (art_dir / "stack.txt").write_text((art_dir / "stack.txt").read_text() + "\n")
+    with pytest.raises(ValueError):
+        model_stacked.load_artefact(art_dir)

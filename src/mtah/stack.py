@@ -117,7 +117,8 @@ def features(proba, onset, seq):
     add(_wmax(o, 13, 37), "o_max[13,37]")
     add(ts, "since_ball")
     add(tu, "until_ball")
-    return np.stack(cols, axis=1), names, np.asarray(sign, dtype=np.int8)
+    # rounded to 1e-4 so that last-bit differences between machines cannot move a tree split
+    return np.round(np.stack(cols, axis=1), 4), names, np.asarray(sign, dtype=np.int8)
 
 
 def swap(X, sign):
@@ -143,11 +144,12 @@ def fit(X, y, sign, cfg=None, weight=None, rng=None):
     return lgb.train(cfg, data, num_boost_round=rounds)
 
 
-def predict_proba(booster, X, sign=None, symmetric=False):
-    """float32 [T,3] in (H, A, D) order. symmetric=True averages with the swapped input."""
-    p = booster.predict(X, num_threads=booster.params.get("num_threads", 4))
+def predict_proba(booster, X, sign=None, symmetric=False, num_threads=1):
+    """float32 [T,3] in (H, A, D) order. symmetric=True averages with the swapped input.
+    Rows are scored independently, so the thread count does not change the result."""
+    p = booster.predict(X, num_threads=num_threads)
     if symmetric and sign is not None:
-        q = booster.predict(swap(X, sign), num_threads=booster.params.get("num_threads", 4))
+        q = booster.predict(swap(X, sign), num_threads=num_threads)
         p = 0.5 * (p + q[:, [A, H, D]])
-    p = np.asarray(p, dtype=np.float64)
+    p = np.round(np.asarray(p, dtype=np.float64), 6)
     return (p / p.sum(axis=1, keepdims=True)).astype(np.float32)
