@@ -55,13 +55,23 @@ both from the stored frame-model outputs and end to end from the degraded sequen
 `meta.json` in the artefact names the base model module and artefact; the booster file is checked
 against its recorded SHA-256 on load, and the feature list is checked on every call.
 
-## Two feature sets
+## Three feature sets
 
 - **standard** (135 columns): everything listed above.
 - **outputs only** (79 columns, `use_cues: false`): the frame model's probabilities and onset
   only, with no ball-observed flag, no nearest-player margin and no time since/until the ball.
   This variant cannot react to a tracking property the frame model has not already digested, so
   it transfers exactly as far as the frame model does.
+- **probabilities only** (54 columns, `use_cues: false, use_onset: false`): `pH − pA` and
+  `pH + pA` only. For a frame model whose onset output is out of range on the target.
+
+Why the third set exists: the label-free input check (below) showed that `lgb_v1`'s
+probabilities are in range on the target, but its onset output is almost silent there (about a
+tenth of the external peak rate), because that head keys on ball-velocity jumps that the target's
+low-pass-filtered ball does not produce. Forcing the onset input of the outputs-only stacker to
+zero on the Metrica games drops it 0.03–0.05 *below* the plain frame model (it has learned "no
+onset nearby means no change"), so a stacker may only use the onset channel of a frame model
+whose onset output is in range on the target.
 
 ## Results (frozen decoder on both sides; paired rule: ≥ +0.01 mean, non-negative on ≥ 4 of 5)
 
@@ -81,8 +91,9 @@ Family = mean official spellF1 over the label views 0 / 0.5 / 1.0 s.
 The standard set is 0.003 better on DFL nominal but loses most of its gain on the Metrica games,
 through the alive/dead decision (alive-dead F1 0.953 → 0.943): the ball cues it learned on the
 DFL degradation draws misread Metrica's stoppage gaps. The outputs-only set keeps alive-dead F1
-at 0.952 and gains on every Metrica game in every draw. It is the one selected
-(`models/stack_lgb_v1p`, `configs/v1p.json`).
+at 0.952 and gains on every Metrica game in every draw (`models/stack_lgb_v1p`,
+`configs/v1p.json`), but it depends on the onset channel (see above), which rules it out for
+`lgb_v1` on the target.
 
 What changes in the output (view 0.5 s, outputs-only): recall at IoU 0.5 of true possessions of
 1–2 s rises from 0.24 to 0.31 on DFL and from 0.25 to 0.36 on Metrica, of 2–5 s from 0.54 to 0.58

@@ -86,6 +86,8 @@ def main():
     ap.add_argument("--weight", choices=("none", "spell"), default="none")
     ap.add_argument("--features", choices=("full", "proba"), default="full",
                     help="proba: the frame model's own outputs only (no ball cues, no margin)")
+    ap.add_argument("--no-onset", action="store_true",
+                    help="leave out the team-change onset channel (probabilities only)")
     ap.add_argument("--metrica", action="store_true")
     ap.add_argument("--holdout", action="store_true",
                     help="also write stacked predictions for the holdout matches (never scored here)")
@@ -93,6 +95,7 @@ def main():
     args = ap.parse_args()
     cfg = {"num_boost_round": args.rounds}
     use_cues = args.features == "full"
+    use_onset = not args.no_onset
     rng = np.random.default_rng(20271117)
     t0 = time.time()
 
@@ -108,7 +111,7 @@ def main():
                 if got is None:
                     continue
                 proba, onset, _, seq = got
-                X, names, sign = stack.features(proba, onset, seq, use_cues)
+                X, names, sign = stack.features(proba, onset, seq, use_cues, use_onset)
                 y = min_control(seq.y, int(round(args.tau * FPS)))
                 keep = np.flatnonzero((rng.random(len(y)) < 1.0 / args.every) & (y >= 0))
                 w = spell_weight(y, 125)[keep] if args.weight == "spell" else None
@@ -130,7 +133,7 @@ def main():
                     if got is None:
                         continue
                     proba, onset, frame, seq = got
-                    X, _, _ = stack.features(proba, onset, seq, use_cues)
+                    X, _, _ = stack.features(proba, onset, seq, use_cues, use_onset)
                     out = EXT / "preds" / args.name / sub / folder / f"{mid}_{p}.npz"
                     out.parent.mkdir(parents=True, exist_ok=True)
                     np.savez_compressed(out, proba=stack.predict_proba(booster, X, num_threads=4),
@@ -162,7 +165,7 @@ def main():
             booster.save_model(str(Path(args.save) / "stack.txt"))
             model_stacked.write_meta(
                 args.save, names, base_module="mtah.model", base_artefact=f"models/{args.base}",
-                onset_key="turn_onset", use_cues=use_cues, fitted_on=OOF5, folders=train_folders, rows=int(len(y)),
+                onset_key="turn_onset", use_cues=use_cues, use_onset=use_onset, fitted_on=OOF5, folders=train_folders, rows=int(len(y)),
                 every=args.every, rounds=args.rounds, label_tau_s=args.tau, weight=args.weight,
                 params={k: v for k, v in stack.DEFAULT_CFG.items()},
                 note="fitted on leave-one-match-out out-of-fold probabilities of the base model; "

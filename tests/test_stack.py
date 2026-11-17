@@ -43,6 +43,11 @@ def test_probability_only_features_need_no_sequence():
     np.testing.assert_array_equal(X, full[:, keep])               # same columns, same values
     Xs, _, _ = stack.features(proba[:, [A, H, 2]], onset, None, use_cues=False)
     np.testing.assert_allclose(Xs, stack.swap(X, sign), atol=1e-6)
+    # without the onset channel only the two probability channels remain, and onset is ignored
+    Xn, names_n, _ = stack.features(proba, onset, None, use_cues=False, use_onset=False)
+    assert all(n[0] in "da" for n in names_n) and set(names_n) < set(names)
+    np.testing.assert_array_equal(Xn, stack.features(proba, None, None, False, False)[0])
+    np.testing.assert_array_equal(Xn, X[:, [names.index(n) for n in names_n]])
 
 
 def test_cues():
