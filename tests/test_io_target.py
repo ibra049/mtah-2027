@@ -281,3 +281,44 @@ def test_predict_pipeline(tmp_path):
     # kickoff rule off -> nothing forced
     off = predict.run_pipeline(seqs, tags, dict(conf, kickoff_rule=False), cfg)
     assert not (off[300:350] == 2).all()
+
+
+def test_tag_stats_masks():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.tag_stats import masks, slug
+    phase = io_target.load_config()["tag_phase"]
+    tags = np.array([(0, 4, "BUILD UP", "H", "", ""),
+                     (2, 6, "PROGRESSION", "A", "", ""),
+                     (5, 8, "DEFENDING IN MIDDLE THIRD", "H", "", ""),
+                     (0, 10, "SET PIECES", "N", "Throw-in", ""),
+                     (9, 12, "LONG BALL", "A", "", "")], dtype=TAG_DTYPE)
+    m = masks(tags, 10, phase)
+    assert m["att_H"].nonzero()[0].tolist() == [0, 1, 2, 3]
+    assert m["att_A"].nonzero()[0].tolist() == [2, 3, 4, 5, 9]
+    assert m["def_H"].nonzero()[0].tolist() == [5, 6, 7]
+    assert m["any"].all()
+    assert slug("Kick Off (Start)") == "KICK_OFF_START" and slug("Throw-in") == "THROW_IN"
+
+
+def test_tag_agreement_ball_split():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.check_candidate import tag_agreement
+    phase = io_target.load_config()["tag_phase"]
+    codes = np.array([0, 0, 1, 1, 2, 0], dtype=np.int8)
+    ball = np.array([1, 0, 1, 0, 1, 1], dtype=bool)
+    tags = np.array([(0, 6, "BUILD UP", "H", "", "")], dtype=TAG_DTYPE)
+    out = tag_agreement(codes, tags, phase, ball=ball)
+    assert out["attacking"] == (5, 0.6)
+    assert out["attacking|ball"] == (3, 2 / 3)      # frames 0,2,5 -> H,A,H
+    assert out["attacking|noball"] == (2, 0.5)      # frames 1,3 -> H,A
+
+
+def test_half_stats():
+    from mtah.check_candidate import half_stats
+    # 1 s H, 0.5 s D, 3 s A, 2 s D, 0.4 s H  (25 fps)
+    codes = np.array([0] * 25 + [2] * 12 + [1] * 75 + [2] * 50 + [0] * 10, dtype=np.int8)
+    s = half_stats(codes, 0, len(codes))
+    assert s["n_possessions"] == 3 and s["n_dead"] == 2
+    assert s["share_lt1s"] == "0.3333" and s["share_lt2s"] == "0.6667" and s["share_lt4s"] == "1.0000"
+    assert s["median_dead_s"] == f"{np.median([0.48, 2.0]):.2f}"
+    assert s["dead_share"] == f"{62 / 172:.4f}"

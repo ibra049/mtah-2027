@@ -1,7 +1,6 @@
 {
   "_doc": "Degradation of clean DFL tracking toward Metrica automatic tracking. Each value is either a published fact (DATA.md/CHALLENGE.md) or a stated assumption; nothing is fitted to the target data or GT.",
   "seed": 20271117,
-
   "_ball_missing_frac": "FACT DATA.md: ball present on 59.3% of graded frames (94,214/158,857) -> 0.407 missing. Base hazard is solved per sequence by bisection to hit it.",
   "ball_missing_frac": 0.407,
   "_ball_gap_mean_s": "ASSUMPTION: DATA.md says missing 'in bursts' due to occlusions, crowded boxes, balls in the air; no length published. 1.5 s ~ duration of a duel/aerial ball.",
@@ -16,7 +15,6 @@
   "ball_logmult_fast": 0.693,
   "_drop_ball_z": "FACT DATA.md/starter baseline: ATD ball rows are x,y,speed only; no height.",
   "drop_ball_z": true,
-
   "_player_missing_frac": "FACT DATA.md: mean 20.5 tracked objects over graded frames for 22 players -> 1-20.5/22 = 0.068 (duplicates below add back ~0.01 object).",
   "player_missing_frac": 0.068,
   "_player_gap_mean_s": "ASSUMPTION: occlusion gaps ~2 s; no number published.",
@@ -29,63 +27,210 @@
   "swap_prob": 0.3,
   "_dup": "FACT (qualitative) DATA.md: count 'occasionally exceeds 22 when the tracker duplicates someone'. ASSUMPTION: 0.5 duplicate tracklets per team-minute, 0.5-3 s, offset N(0,0.7 m).",
   "dup_per_min": 0.5,
-  "dup_len_s": [0.5, 3.0],
+  "dup_len_s": [
+    0.5,
+    3.0
+  ],
   "dup_offset_m": 0.7,
-
   "_jitter": "ASSUMPTION: automatic tracking noise, none published; AR(1) rho 0.9 (smooth, not white, so velocities stay plausible), sigma 0.2 m players, 0.3 m ball.",
   "player_jitter_m": 0.2,
   "ball_jitter_m": 0.3,
   "jitter_rho": 0.9,
-
   "keep_extra": [],
-
   "_ball_dead_mult": "ASSUMPTION: achieved ball-missing-rate ratio on dead-ball frames (y==D) vs alive play, solved by bisection (a hazard multiplier gets diluted because dead stretches have few players near a still ball). Docs give no split; base 1.0 = no dependence. Profiles randomise it 0.8-2x so models cannot lean on 'ball missing => dead' or its opposite. Achieved missing ratio dead/alive is logged per sequence.",
   "ball_dead_mult": 1.0,
   "_false_ball": "FACT (qualitative): automatic ball detection, no human correction (DATA.md) -> spurious detections exist. ASSUMPTION: rate per minute, 1-6 frame bursts, half near a visible player (head/shoe), half anywhere on the pitch. Base 0 = off.",
   "false_ball_per_min": 0.0,
-  "false_ball_len_frames": [1, 6],
+  "false_ball_len_frames": [
+    1,
+    6
+  ],
   "false_ball_near_player_prob": 0.5,
   "_wrong_team": "ASSUMPTION: team assignment of tracklets is automatic (no identities, DATA.md) -> rarely a tracklet lands in the other team's slots. Probability per tracklet. Base 0 = off.",
   "wrong_team_prob": 0.0,
-
   "_profiles": "Cached training/eval degradations (~/mtah-external/cache_deg/<profile>/<seed>/). FACT params (ball_missing_frac, player_missing_frac, slots_per_team, drop_ball_z) are fixed per profile; every ASSUMPTION param in 'randomize' is drawn uniformly per sequence from [lo, hi] and saved in the sidecar JSON. Ranges bracket the base default; none fitted to target data.",
   "profiles": {
     "nominal": {
       "_doc": "Documented target facts (59.3% ball observed, 20.5 objects) with a spread of assumption values around the defaults.",
       "overrides": {},
       "randomize": {
-        "ball_gap_mean_s": [0.8, 2.5],
-        "ball_logmult_per_crowd_player": [0.15, 0.45],
-        "ball_logmult_aerial": [0.7, 2.0],
-        "ball_logmult_fast": [0.3, 1.1],
-        "ball_dead_mult": [0.8, 2.0],
-        "false_ball_per_min": [0.1, 1.0],
-        "player_gap_mean_s": [1.0, 3.0],
-        "swap_prob": [0.15, 0.45],
-        "dup_per_min": [0.2, 1.0],
-        "wrong_team_prob": [0.0, 0.02],
-        "player_jitter_m": [0.1, 0.3],
-        "ball_jitter_m": [0.15, 0.45],
-        "jitter_rho": [0.85, 0.95]
+        "ball_gap_mean_s": [
+          0.8,
+          2.5
+        ],
+        "ball_logmult_per_crowd_player": [
+          0.15,
+          0.45
+        ],
+        "ball_logmult_aerial": [
+          0.7,
+          2.0
+        ],
+        "ball_logmult_fast": [
+          0.3,
+          1.1
+        ],
+        "ball_dead_mult": [
+          0.8,
+          2.0
+        ],
+        "false_ball_per_min": [
+          0.1,
+          1.0
+        ],
+        "player_gap_mean_s": [
+          1.0,
+          3.0
+        ],
+        "swap_prob": [
+          0.15,
+          0.45
+        ],
+        "dup_per_min": [
+          0.2,
+          1.0
+        ],
+        "wrong_team_prob": [
+          0.0,
+          0.02
+        ],
+        "player_jitter_m": [
+          0.1,
+          0.3
+        ],
+        "ball_jitter_m": [
+          0.15,
+          0.45
+        ],
+        "jitter_rho": [
+          0.85,
+          0.95
+        ]
       }
     },
     "harsh": {
       "_doc": "Stress profile (captain decision): ball observed ~50%, more fragmentation (more missing, shorter tracklets, more swaps), more jitter and tracker errors. Robustness check, not a claim about the target.",
-      "overrides": {"ball_missing_frac": 0.5, "player_missing_frac": 0.10},
+      "overrides": {
+        "ball_missing_frac": 0.5,
+        "player_missing_frac": 0.1
+      },
       "randomize": {
-        "ball_gap_mean_s": [1.0, 3.0],
-        "ball_logmult_per_crowd_player": [0.15, 0.45],
-        "ball_logmult_aerial": [0.7, 2.0],
-        "ball_logmult_fast": [0.3, 1.1],
-        "ball_dead_mult": [0.8, 2.0],
-        "false_ball_per_min": [0.5, 2.0],
-        "player_gap_mean_s": [0.6, 2.0],
-        "swap_prob": [0.3, 0.6],
-        "dup_per_min": [0.5, 2.0],
-        "wrong_team_prob": [0.01, 0.05],
-        "player_jitter_m": [0.2, 0.5],
-        "ball_jitter_m": [0.3, 0.7],
-        "jitter_rho": [0.85, 0.95]
+        "ball_gap_mean_s": [
+          1.0,
+          3.0
+        ],
+        "ball_logmult_per_crowd_player": [
+          0.15,
+          0.45
+        ],
+        "ball_logmult_aerial": [
+          0.7,
+          2.0
+        ],
+        "ball_logmult_fast": [
+          0.3,
+          1.1
+        ],
+        "ball_dead_mult": [
+          0.8,
+          2.0
+        ],
+        "false_ball_per_min": [
+          0.5,
+          2.0
+        ],
+        "player_gap_mean_s": [
+          0.6,
+          2.0
+        ],
+        "swap_prob": [
+          0.3,
+          0.6
+        ],
+        "dup_per_min": [
+          0.5,
+          2.0
+        ],
+        "wrong_team_prob": [
+          0.01,
+          0.05
+        ],
+        "player_jitter_m": [
+          0.2,
+          0.5
+        ],
+        "ball_jitter_m": [
+          0.3,
+          0.7
+        ],
+        "jitter_rho": [
+          0.85,
+          0.95
+        ]
+      }
+    },
+    "stoppage": {
+      "_doc": "Captain decision 2026-11-17. Ball lost much more in dead-ball stretches than in alive play: achieved dead/alive missing ratio drawn LOG-UNIFORM 2-10x, overall missing still the FACT 40.7% (so alive missing falls to ~8-28%), and dead-ball gaps long (mean 10-40 s, i.e. most of a stoppage; DFL dead runs average ~25 s). Justification is documentation only: starter/baseline.py says leaving ball-less frames as D 'is what makes the D class mean anything at all', and the published baseline macroF1 (0.64-0.68) is unreachable unless the tracker loses the ball in stoppages (docs/proxy_check.md: DFL nominal gives 0.36-0.41). No target measurement. Everything else as nominal.",
+      "overrides": {},
+      "randomize": {
+        "ball_gap_mean_s": [
+          0.8,
+          2.5
+        ],
+        "ball_logmult_per_crowd_player": [
+          0.15,
+          0.45
+        ],
+        "ball_logmult_aerial": [
+          0.7,
+          2.0
+        ],
+        "ball_logmult_fast": [
+          0.3,
+          1.1
+        ],
+        "false_ball_per_min": [
+          0.1,
+          1.0
+        ],
+        "player_gap_mean_s": [
+          1.0,
+          3.0
+        ],
+        "swap_prob": [
+          0.15,
+          0.45
+        ],
+        "dup_per_min": [
+          0.2,
+          1.0
+        ],
+        "wrong_team_prob": [
+          0.0,
+          0.02
+        ],
+        "player_jitter_m": [
+          0.1,
+          0.3
+        ],
+        "ball_jitter_m": [
+          0.15,
+          0.45
+        ],
+        "jitter_rho": [
+          0.85,
+          0.95
+        ],
+        "ball_dead_gap_mean_s": [
+          10.0,
+          40.0
+        ]
+      },
+      "randomize_log": {
+        "ball_dead_mult": [
+          2.0,
+          10.0
+        ]
       }
     }
   }

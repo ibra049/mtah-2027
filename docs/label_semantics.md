@@ -120,3 +120,27 @@ of a pass that does *not* intercept it".
 **Use.** The cached games are a second development set in the provider's own semantics:
 - labels = the event chain;
 - the tracking is the provider's sample tracking, not degraded DFL.
+
+## When does the label flip, relative to the physical touch? (2026-11-17, `scripts/change_timing.py`)
+Signed offset in frames = touch − flip, for every direct team change (no dead ball between).
+- **DFL:** min_control(0.5 s) labels against DFL events aligned to the ball track.
+- **Metrica:** event-chain labels against Metrica events aligned the same way (named player within
+  1.5 m of the ball, maximum velocity change, ±1 s; 96% aligned).
+
+| | n | new team's touch: median [IQR] | within 3 / 8 frames | old team's last touch: median [IQR] |
+|---|---|---|---|---|
+| DFL, all | 1688 | +0 [−1, +3] | 0.64 / 0.68 | −36 [−52, −19] |
+| DFL, duel won | 283 | −1 [−2, +0] | 0.71 / 0.78 | −40 |
+| DFL, other (loose ball / recovery) | 1405 | +0 [−1, +12] | 0.63 / 0.66 | −35 |
+| Metrica, all | 822 | +0 [+0, +2] | 0.80 / 0.91 | −26 [−43, −3] |
+| Metrica, tackle/theft | 225 | +0 [+0, +2] | 0.72 / 0.84 | +0 |
+| Metrica, interception | 306 | +1 [+0, +2] | 0.83 / 0.95 | −30 |
+| Metrica, other | 291 | +0 [+0, +1] | 0.81 / 0.91 | −34 |
+
+**Both conventions flip at the new team's first touch** (median 0 frames), not when the old team
+loses the ball (1.0–1.4 s earlier) and not mid-flight.
+
+**DFL's positive tail** (loose balls, Q3 +12) is a measurement artifact. DFL has no reception
+events, so the nearest logged touch of the new team is sometimes its next pass.
+
+**No relabel shift is needed.**
