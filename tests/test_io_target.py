@@ -365,3 +365,12 @@ def test_audits_accept_a_canonicalisation_callable():
     assert len(calls) == 2 and "g6" in r1 and "p4" in r2
     with pytest.raises(SystemExit):
         player_audit.resolve_canon("no_such_function_xyz")
+
+
+def test_stack_shift_standardisation():
+    from mtah.stack_shift import shifts
+    ref = {"d": [-1, -0.5, 0, 0.5, 1], "share_pD_gt_0.5": 0.4}
+    tgt = {"d": [-1, -0.25, 0.5, 0.5, 1], "share_pD_gt_0.5": 0.5}
+    zs, diffs = shifts(tgt, ref, [5, 25, 50, 75, 95])
+    assert zs["d"] == [0.0, 0.25, 0.5, 0.0, 0.0]
+    assert abs(diffs["share_pD_gt_0.5"] - 0.1) < 1e-12
