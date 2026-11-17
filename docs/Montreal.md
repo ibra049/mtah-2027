@@ -46,7 +46,7 @@ every component must beat (Section 8).
 | homography | **dropped**: only needed to connect tracking and video |
 | tactical and broadcast video | **dropped**: no vision component; nothing was checked against the video |
 | broadcast ATD | **dropped**: not synchronised with the tactical timeline |
-| public 5-minute ground truth | **breakage check only** (pass/fail): never used to choose between versions |
+| public 5-minute ground truth | reserved as a **breakage check only** (pass/fail), never used to choose between versions; not run on the shipped file |
 
 Two facts about the Smart Tagging, from label-free aggregates of the tags:
 - Each defending-phase code mirrors an attacking-phase code exactly (same durations, teams
