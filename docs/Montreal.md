@@ -4,7 +4,7 @@ More Than A Hack 2027, Initial Challenge. Team **Montreal**.
 Code: https://github.com/ibra049/mtah-2027. The file is regenerated with one command (see Reproduction).
 
 > **Status of this document.** The only **TODO** left is the holdout score, which is not yet
-> measured. Nothing below is estimated or invented. The appendix describes the fallback
+> measured. Shipped candidate: **v1q** (Sections 7–9). Nothing below is estimated or invented. The appendix describes the fallback
 > file (the organisers' reference baseline, reproduced byte for byte), which keeps the document
 > accurate whichever file is uploaded.
 
@@ -30,12 +30,14 @@ Pipeline per half:
 1. parse the tracking;
 2. compute team-symmetric, gap-aware features;
 3. LightGBM gives P(H, A, D) per frame;
-4. an integer-cost segment Viterbi decoder produces the labels, with frames before the tagged
+4. a temporal stacker re-reads those probabilities over ±2 s and sharpens them;
+5. an integer-cost segment Viterbi decoder produces the labels, with frames before the tagged
    kickoff forced to D;
-5. `X` is written outside the graded blocks.
+6. `X` is written outside the graded blocks.
 
 The official nearest-player baseline, reproduced byte for byte, is our fallback and the reference
-every component must beat (Section 8).
+every component must beat (Section 8). Candidates that pass externally must also pass label-free
+transfer checks on the provided tracking before they can ship (Section 9).
 
 ## 2. Assets used and dropped
 
@@ -109,7 +111,7 @@ Every parameter is labelled in the config as either:
 | slot swaps, duplicate tracklets, positional jitter | swap prob 0.15–0.45 within 1 m; 0.2–1 duplicates/min; AR(1) jitter 0.1–0.3 m | ASSUMPTION |
 | false ball detections, wrong-team tracklets | 0.1–1 per min; 0–2% of tracklets | ASSUMPTION |
 
-Three profiles, two fixed noise seeds each:
+Profiles, two fixed noise seeds each:
 - **nominal**: ball dropout largely independent of game state (dead/alive missing ratio
   0.8–2×).
 - **stoppage**: the tracker loses the ball mostly during stoppages.
@@ -121,8 +123,28 @@ Three profiles, two fixed noise seeds each:
   - This uses published aggregate scores only, no target measurement.
 - **harsh**: stress test (ball observed ~50%, more fragmentation and tracker errors). Used for
   robustness, not as a claim about the target.
+- **nominal_lj / stoppage_lj** (low jitter): player and ball jitter drawn log-uniformly from
+  0.005–0.05 m. External justification: clean DFL tracking has 1.5–7% of player object-frames in
+  5-second stretches spanning under 0.2 m (players standing), and every jittered profile had none.
+  The old jitter range erased a property of real tracking.
+- **nominal_sm / stoppage_sm** (smoothed): the low-jitter profile plus a tracker output filter.
+  - Short ball gaps (0.5–2 s) are interpolated, then the ball is Gaussian low-passed with sigma
+    drawn log-uniformly from 1–8 frames, and players from 1–4 frames.
+  - External justification: output smoothing differs between providers in the external data
+    itself (clean ball velocity lag-1 autocorrelation ≈ 0.78 for Metrica against ≈ 0.31 for DFL).
+  - How strongly an automatic tracker filters, and how long its tracklets last, is undocumented,
+    so both remain ASSUMPTIONS.
 
-Models train on all three profiles, with per-half descriptors of the noise regime as inputs.
+The low-jitter and smoothed ranges were widened after label-free audits of the provided tracking
+(Section 9) showed that the original profiles were too jittery and their ball track too rough.
+The new ranges are randomised per half and deliberately wide. Nothing was fitted or matched to
+the provided data.
+
+Training profiles:
+- **lgb_v1** (the shipped frame model): nominal and harsh draws, seeds 0 and 1. Its stacker uses
+  the out-of-fold probabilities of the same draws.
+- **Later frame models:** also stoppage and the low-jitter profiles, with per-half descriptors of
+  the noise regime as inputs (Section 7).
 
 ## 6. Possession rules implemented
 
@@ -175,11 +197,21 @@ hint.
   The final choice minimises the worst-case regret over the three label views.
 - **Determinism.** Integer costs and a fixed tie order make the output machine-independent.
 
-Shipped configuration (`configs/final.json` = candidate v1):
-- **Model:** `models/lgb_v1`.
+**Temporal stacker** (`mtah.stack`, `mtah.model_stacked`; `docs/stacker.md`). A second LightGBM
+model re-reads the frame model's own probabilities over about ±2 s. It sees the shape of the
+curves around a frame, which the frame model never sees, and re-sharpens short possessions.
+- **Inputs:** the shipped variant uses the probabilities only, pH − pA and pH + pA at fixed
+  offsets and window means (54 columns). It reads no onset channel and no ball cues.
+- **Fitting:** on the frame model's leave-one-match-out out-of-fold probabilities, so it learns
+  from probabilities of the quality seen on an unseen match.
+- **Symmetry:** team-symmetric by construction, like the frame model.
+
+Shipped configuration (`configs/final.json` = candidate **v1q**):
+- **Frame model:** `models/lgb_v1`.
+- **Stacker:** `models/stack_lgb_v1q`, probabilities only.
 - **Decoder:** segment Viterbi with switch cost 3000, `min_poss` 19 frames, `min_dead` 50 frames and
   cost cap 4605.
-- **Turned off:** onset gain, snapping, pruning and boundary offsets, tag priors.
+- **Turned off:** onset gain, snapping, pruning, boundary offsets and tag priors.
 - **Kickoff rule:** on.
 
 ## 8. Evaluation protocol and results
@@ -205,25 +237,77 @@ The external protocol ranks the three baseline windows as the target does, and s
 selection metric lands within 0.002 of its published target score. This is why we trust it for
 selection.
 
-| candidate | selection metric | label views τ = 0 / 0.5 / 1 s | harsh | paired gain | matches won | Metrica (veto set) | holdout |
-|---|---|---|---|---|---|---|---|
-| **v1 = lgb_v1 + decoder (shipped)** | **0.6469** | 0.617 / 0.639 / 0.685 | 0.6161 | +0.405 vs smooth50 | 5 / 5 | 0.6575 | **TODO** |
-| v2 = lgb_v2 + same decoder (under evaluation) | 0.6786 (nominal 0.6730, stoppage 0.6842) | | 0.6270 | +0.0317 vs v1 | 5 / 5 | 0.7110 | **TODO** |
+| candidate | external score (DFL) | label views / profiles | harsh | paired gain | matches won | Metrica (veto set) | target decision | holdout |
+|---|---|---|---|---|---|---|---|---|
+| v1 = lgb_v1 + decoder | 0.6469 | τ = 0 / 0.5 / 1 s: 0.617 / 0.639 / 0.685 | 0.6161 | +0.405 vs smooth50 | 5 / 5 | 0.6575 | previous upload | TODO |
+| **v1q = lgb_v1 + stacker (probabilities only) + decoder** | **0.6570** (nominal) | | 0.6247 | +0.0101 vs v1 | 5 / 5 | 0.6835 (+0.0260, 3 / 3); nominal_lj 0.6914, stoppage_lj 0.7384 | **shipped** | TODO |
+| v1p = v1 + stacker with onset input | | | | | | | rejected | |
+| v2 = lgb_v2 + decoder | 0.6786 | nominal 0.6730, stoppage 0.6842 | 0.6270 | +0.0317 vs v1 | 5 / 5 | 0.7110 | rejected | |
+| v3 = lgb_v3 + decoder | 0.6808 | | | | | | rejected | |
+| v4 = lgb_v4 (canonicalised inputs) + decoder | 0.6806 | | | | | | under evaluation | |
 
-- **v2.** The second model adds control and touch events, noise-regime descriptors and training
-  on the stoppage profile. It passes the adoption rule against v1.
-- **Why v1 still ships.** Label-free checks on the target show v2 producing more and shorter dead
-  stretches than any external match. This document will name the shipped candidate once that
-  decision is made.
+- **The shipped file is not the highest-scoring external model.** The label-free transfer checks
+  of Section 9 decide which candidates may run on the provided tracking at all.
+- **v2 and v3 (rejected).** Both score higher externally, but on the provided tracking they
+  over-call dead ball:
+  - dead share 0.47 and 0.50, against 0.42 for v1;
+  - more and shorter dead stretches than any external match.
+
+  The cause is plain in the audits. The provided ball track is low-pass filtered (ball velocity
+  lag-1 autocorrelation 0.998, against at most 0.78 in any external source). On it, the touch
+  detector these models depend on fires about once a minute, against 20–35 times externally, so
+  their touch-timing features sit outside the range they were trained on.
+- **v1p (rejected).** Its stacker depends on the frame model's team-change onset output. On the
+  provided tracking that output is nearly silent: its 95th percentile is 2.5–4.5 reference IQRs
+  below every external profile. Externally, forcing that input to zero drops v1p below plain v1.
+- **v1q (shipped).** The same stacker without the onset input. Every input it reads is within
+  ±0.8 IQR of the external references on the provided tracking. Its possession count (313)
+  matches v1's (312), and it removes some of v1's short false stoppages.
+- **v4 (under evaluation).** Its inputs are canonicalised in both domains before any feature is
+  computed: short ball gaps interpolated, tracks low-pass filtered, kinematics over 0.3 s.
 
 Public 5-minute window: reserved as a breakage check only (alignment and label meaning,
 pass/fail). **Not run** on the shipped file. The fallback's frame alignment was verified
 instead by reproducing the organisers' four published baseline files byte for byte.
 
-## 9. Limitations
+## 9. Label-free transfer checks
 
-- **Domain gap.** The noise model is built from published aggregates and stated assumptions, not
-  from the target's raw tracking statistics, and Bundesliga is not LaLiga. The `stoppage` and
+These checks look only at the provided tracking and at our own outputs, never at the ground truth.
+None of them fits a parameter; each can only rule a candidate out. All run through the
+data-access wrapper and print aggregates only.
+
+- **Feature drift report.** Compares a model's feature medians on the provided tracking with the
+  5–95% band of its external training data. It rejected v2 (8 features out of band, touch timing
+  +3.7 IQR) and cleared v4 apart from its per-half gap descriptors.
+- **Ball-track audit** (`mtah.ball_audit`). Compares ball gaps, speed, velocity change,
+  smoothness and touch rate between the provided tracking and every external source. It showed
+  that the provided ball is low-pass filtered, so touch-based features cannot transfer. This drove
+  the canonicalised feature version 4 and the smoothed noise profiles.
+- **Player-track audit** (`mtah.player_audit`). The same comparison for player tracks. Speeds
+  match the external data, but the provided tracks are smoother and our simulator fragmented them
+  too much. This drove the low-jitter and smoothed profiles.
+- **Canonical audit.** The two audits rerun after feature version 4 canonicalises both domains.
+  The provided tracking then falls inside the external spread on 21 of 22 statistics (the
+  exception: it has no ball gaps of 1.5–4 s). This allowed v4 to be run on the provided tracking
+  at all.
+- **Stack-input shift** (`mtah.stack_shift`). Standardised shift of the stacker's inputs against
+  their external out-of-fold distribution. It rejected v1p (onset input silent) and kept v1q (all
+  inputs within ±0.8 IQR).
+- **Candidate comparison and external envelope** (`mtah.check_candidate`,
+  `mtah.compare_candidates`):
+  - per-half possession and dead-stretch statistics, compared with the same statistics of the
+    candidate's own decoded output on external matches;
+  - what the frames on which two candidates disagree look like: player speed, ball visibility,
+    and position relative to Smart Tagging phases.
+
+  These rejected v3, which adds dead frames with the ball in view, and preferred v1q's dead-ball
+  edits over v1's.
+
+## 10. Limitations
+
+- **Domain gap.** The noise model is built from published aggregates and stated assumptions;
+  its ranges were widened, never fitted, after label-free audits of the provided tracking. And
+  Bundesliga is not LaLiga. The `stoppage` and
   `nominal` profiles bracket the most consequential unknown: how the target tracker loses the
   ball in stoppages.
 - **Label granularity.** The ground truth's exact notion of "controlled possession" is unknown.
@@ -240,7 +324,7 @@ instead by reproducing the organisers' four published baseline files byte for by
   - a learned noise model fitted to the target tracker's own statistics (label-free);
   - more external matches from other leagues.
 
-## 10. Reproduction
+## 11. Reproduction
 
 See the README:
 - install with the pinned `requirements.lock.txt` (Python 3.12);
@@ -252,15 +336,17 @@ The output is deterministic and its SHA-256 is printed. The expected value is in
 and an identical SHA-256 from a clean clone of the public repository. Retraining from the open
 data is documented in the README.
 
-## 11. Rule compliance
+## 12. Rule compliance
 
 - **External-only training and tuning.** Every learned parameter, every tuned value and the
-  adoption rule's scores come from the IDSSE and Metrica sample data. Documented facts about
-  the target (ball visibility, slot count) only set the noise model's FACT parameters.
-- **Label-free target checks.** The choice between finished candidates also looked at
-  label-free sanity statistics of each candidate's own output on the target: possession and
-  dead-stretch lengths, and agreement with the provided Smart Tagging. These use no ground
-  truth and fit no parameter.
+  adoption rule's scores come from the IDSSE and Metrica sample data.
+  - Documented facts about the target (ball visibility, slot count) set the noise model's FACT
+    parameters.
+  - Label-free audits of the provided tracking only led us to widen randomised ASSUMPTION ranges
+    (Section 5). Nothing was fitted to it.
+- **Label-free target checks.** The choice between finished candidates also used the
+  label-free transfer checks of Section 9. They read no ground truth, fit no parameter and can
+  only rule a candidate out.
 - **Ground truth.** The public 5-minute window is reserved as a pass/fail breakage check and
   never ranks two versions; it was not run on the shipped file. No hand labels; nothing was
   checked against the video.
