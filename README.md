@@ -72,14 +72,19 @@ needs none of this. Then:
 ```bash
 export PYTHONPATH=src
 # 1. parse IDSSE into canonical sequences and build the fixed degraded caches
-#    (profiles nominal, stoppage and harsh; seeds 0 and 1)
-.venv/bin/python scripts/build_degraded_cache.py nominal stoppage harsh --seeds 0 1
-# 2. train with leave-one-match-out, write out-of-fold predictions and the all-5-match model
-#    to models/<name>/   (the shipped model is models/lgb_v1)
+#    (all profiles in configs/degrade.json, seeds 0 and 1)
+.venv/bin/python scripts/build_degraded_cache.py --seeds 0 1
+# 2. frame model: leave-one-match-out out-of-fold predictions and the all-5-match model in
+#    models/<name>/. configs/model.json holds the settings of the last model trained; the shipped
+#    models/lgb_v4 records its own settings and training draws in meta.json
 .venv/bin/python scripts/model_lomo.py --name <name>
-# 3. decode the out-of-fold predictions with the frozen decoder and score them with the official
+# 3. temporal stacker on the frame model's out-of-fold outputs (docs/stacker.md); shipped:
+#    models/stack_lgb_v4p on lgb_v4
+.venv/bin/python scripts/stack_oof.py --base <name> --name <name>p --metrica --holdout --save models/stack_<name>p
+.venv/bin/python scripts/stack_check.py --artefact models/stack_<name>p --name <name>p
+# 4. decode the out-of-fold predictions with the frozen decoder and score them with the official
 #    metric (team selection table)
-.venv/bin/python scripts/decoder_bench.py export --model <name> --cfg configs/decoder.json --name <labels>
+.venv/bin/python scripts/decoder_bench.py export --model <name>p --cfg configs/decoder.json --name <labels>
 .venv/bin/python scripts/eval_external.py --pred-root ~/mtah-external/labels/<labels>
 ```
 
