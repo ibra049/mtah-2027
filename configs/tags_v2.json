@@ -12,19 +12,73 @@
  "box_half_width_m": 20.16,
  "chance_r_m": 25.0,
  "_phase_len_s": "median length; CREATING CHANCES fixed; others multiplied by U(1-len_spread, 1+len_spread). LONG BALL / BALL IN FINAL THIRD / BALL IN THE BOX lengths are assumptions inside the reported 12-30 s range.",
- "phase_len_s": {"BUILD UP": 20.0, "PROGRESSION": 18.0, "CREATING CHANCES": 30.0, "ATTACKING TRANSITION": 15.0,
-                 "LONG BALL": 12.0, "BALL IN FINAL THIRD": 15.0, "BALL IN THE BOX": 12.0},
- "phase_fixed": ["CREATING CHANCES"],
+ "phase_len_s": {
+  "BUILD UP": 20.0,
+  "PROGRESSION": 18.0,
+  "CREATING CHANCES": 30.0,
+  "ATTACKING TRANSITION": 15.0,
+  "LONG BALL": 12.0,
+  "BALL IN FINAL THIRD": 15.0,
+  "BALL IN THE BOX": 12.0
+ },
+ "phase_fixed": [
+  "CREATING CHANCES"
+ ],
  "len_spread": 0.2,
  "_phase_count_per_match": "DATA.md counts (relative density per code); scaled per half by k, bisected so the share of frames with no attacking-phase tag = target_none.",
- "phase_count_per_match": {"BUILD UP": 22, "PROGRESSION": 66, "CREATING CHANCES": 30, "ATTACKING TRANSITION": 24,
-                           "LONG BALL": 29, "BALL IN FINAL THIRD": 93, "BALL IN THE BOX": 72},
+ "phase_count_per_match": {
+  "BUILD UP": 22,
+  "PROGRESSION": 66,
+  "CREATING CHANCES": 30,
+  "ATTACKING TRANSITION": 24,
+  "LONG BALL": 29,
+  "BALL IN FINAL THIRD": 93,
+  "BALL IN THE BOX": 72
+ },
  "target_none": 0.235,
  "target_both": 0.075,
  "noise": {
-  "clean":   {"sp_offset": ["fixed", 3.5],       "sp_miss": 0.0,  "sp_false_pos": 0, "sp_extra_n": 0.23, "sp_wrong_type": 0.0,  "ph_jitter_s": 0.0, "ph_false_pos": 0},
-  "nominal": {"sp_offset": ["normal", 3.5, 2.0], "sp_miss": 0.10, "sp_false_pos": 2, "sp_extra_n": 0.23, "sp_wrong_type": 0.05, "ph_jitter_s": 1.5, "ph_false_pos": 3},
-  "harsh":   {"sp_offset": ["uniform", -3.0, 12.0], "sp_miss": 0.25, "sp_false_pos": 6, "sp_extra_n": 0.30, "sp_wrong_type": 0.15, "ph_jitter_s": 3.0, "ph_false_pos": 8}
+  "clean": {
+   "sp_offset": [
+    "fixed",
+    3.5
+   ],
+   "sp_miss": 0.0,
+   "sp_false_pos": 0,
+   "sp_extra_n": 0.23,
+   "sp_wrong_type": 0.0,
+   "ph_jitter_s": 0.0,
+   "ph_false_pos": 0
+  },
+  "nominal": {
+   "sp_offset": [
+    "normal",
+    3.5,
+    2.0
+   ],
+   "sp_miss": 0.1,
+   "sp_false_pos": 2,
+   "sp_extra_n": 0.23,
+   "sp_wrong_type": 0.05,
+   "ph_jitter_s": 1.5,
+   "ph_false_pos": 3
+  },
+  "harsh": {
+   "sp_offset": [
+    "uniform",
+    -3.0,
+    12.0
+   ],
+   "sp_miss": 0.25,
+   "sp_false_pos": 6,
+   "sp_extra_n": 0.3,
+   "sp_wrong_type": 0.15,
+   "ph_jitter_s": 3.0,
+   "ph_false_pos": 8
+  }
  },
- "_sp_extra_n": "throw-ins are always N (~40% of restarts); extra N on other set pieces 0.23 brings the N share to ~0.54 = 32/59 on the target."
+ "_sp_extra_n": "throw-ins are always N (~40% of restarts); extra N on other set pieces 0.23 brings the N share to ~0.54 = 32/59 on the target.",
+ "_max_cross_overlap_s": "ASSUMPTION: a window may run on across a turnover into the other team's window by at most this much (target both-teams share ~0.075).",
+ "max_cross_overlap_s": 9.0,
+ "_target_none": "share of ALIVE frames with no attacking-phase tag (calibrated on alive frames; DFL has far more dead time than the target)."
 }

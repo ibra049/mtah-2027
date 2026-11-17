@@ -120,13 +120,15 @@ def phase_anchors(seq, cfg):
     return out
 
 
-def _coverage(intervals, T):
+def _coverage(intervals, T, mask=None):
     cov = {"H": np.zeros(T + 1, np.int32), "A": np.zeros(T + 1, np.int32)}
     for s, e, team in intervals:
         s, e = max(0, s), min(T, e)
         if e > s:
             cov[team][s] += 1; cov[team][e] -= 1
     h, a = np.cumsum(cov["H"])[:T] > 0, np.cumsum(cov["A"])[:T] > 0
+    if mask is not None:
+        h, a = h[mask], a[mask]
     return float(np.mean(~h & ~a)), float(np.mean(h & a)), float(np.mean(h ^ a))
 
 
@@ -149,20 +151,39 @@ def phase_tags(seq, cfg, noise, rng):
     n_team = {k: max(1, len(v)) for k, v in anchors.items()}
 
     def pick(k):
-        quota = {(c, tl): k * cfg["phase_count_per_match"][c] / 2 / 2 for c, tl in anchors}  # per half, per team
-        return [c for c in cands if c[2] < quota[(c[0], c[1])]]
+        """Quota per (code, team) = k * published count per half per team; candidates taken in
+        quota-normalised random order. A window is accepted only if it does not overlap an accepted
+        window of the same team and overlaps the other team's windows by at most
+        max_cross_overlap_s (target: tags tile time, both teams tagged on only ~7.5% of frames)."""
+        quota = {(c, tl): k * cfg["phase_count_per_match"][c] / 2 / 2 for c, tl in anchors}
+        order = sorted((c for c in cands if c[2] < quota[(c[0], c[1])]),
+                       key=lambda c: (c[2] + 0.5) / max(quota[(c[0], c[1])], 1e-9))
+        busy = {"H": np.zeros(T + 1, bool), "A": np.zeros(T + 1, bool)}
+        out = []
+        other = {"H": "A", "A": "H"}
+        cross = int(cfg["max_cross_overlap_s"] * fps)
+        for c in order:
+            s0, e0 = max(0, c[3]), min(T, c[4])
+            if e0 <= s0 or busy[c[1]][s0:e0].any() or busy[other[c[1]]][s0:e0].sum() > cross:
+                continue
+            busy[c[1]][s0:e0] = True
+            out.append(c)
+        return out
 
+    # calibrate on ALIVE frames: DFL halves are 33-54% dead ball (BallStatus), far more than the
+    # target, so whole-half coverage targets would force tags into long stoppages.
+    alive = np.isin(seq.y, (H, A))
     lo, hi = 0.05, 10.0
     for _ in range(20):
         mid = 0.5 * (lo + hi)
-        none, _, _ = _coverage([(s, e, tl) for _, tl, _, s, e in pick(mid)], T)
+        none, _, _ = _coverage([(s, e, tl) for _, tl, _, s, e in pick(mid)], T, alive)
         lo, hi = (mid, hi) if none > cfg["target_none"] else (lo, mid)
     k = 0.5 * (lo + hi)
     chosen = pick(k)
     for _ in range(int(noise["ph_false_pos"])):
         code = str(rng.choice(CODES)); tl = str(rng.choice(["H", "A"]))
         s = int(rng.integers(0, T)); chosen.append((code, tl, -1, s, s + int(cfg["phase_len_s"][code] * fps)))
-    none, both, one = _coverage([(s, e, tl) for _, tl, _, s, e in chosen], T)
+    none, both, one = _coverage([(s, e, tl) for _, tl, _, s, e in chosen], T, alive)
     half = HALF[int(seq.period)]
     f0 = int(seq.frame[0])
     rows = [(f0 + max(0, s), f0 + min(T, e), code, tl, "", half) for code, tl, _, s, e in chosen if min(T, e) > max(0, s)]
