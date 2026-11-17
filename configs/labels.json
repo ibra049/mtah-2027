@@ -1,5 +1,9 @@
 {
-  "_doc": "Label definition for external DFL data (docs/label_semantics.md). Raw BallPossession flips on every touch. Models train on min_control(min_control_tau_s): sub-half-second flicker removed, physical ball ownership kept. The granularity of 'controlled possession' is a decoder parameter, tuned for robustness over the label views in eval_taus_s. Nothing here is fitted to the target ground truth.",
+  "_doc": "Label definition for external DFL data (docs/label_semantics.md). Models train on min_control(min_control_tau_s): physical ball ownership with sub-half-second flicker removed. The granularity of 'controlled possession' is a decoder parameter, tuned for robustness over the label views in eval_taus_s. Evidence for the range, all external: possessions derived from the provider's own event definitions in the public Metrica sample games have 12-13% under 1 s and 25-30% under 2 s, matching DFL at tau 0-0.5 s; tau=2 s would leave 4% under 2 s. Nothing here is fitted to the target ground truth.",
   "min_control_tau_s": 0.5,
-  "eval_taus_s": [0.5, 1.0, 2.0]
+  "eval_taus_s": [
+    0.0,
+    0.5,
+    1.0
+  ]
 }

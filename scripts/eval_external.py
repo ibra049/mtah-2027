@@ -1,7 +1,7 @@
 """Team table: the only external numbers that decide what ships (CONTRACT.md, evaluation protocol).
 
 Scores label predictions with the official metric against a FAMILY of label definitions,
-min_control(tau) for tau in configs/labels.json `eval_taus_s` (0.5, 1.0, 2.0 s): the granularity
+min_control(tau) for tau in configs/labels.json `eval_taus_s` (0, 0.5, 1.0 s): the granularity
 of "controlled possession" on the target is uncertain, so a candidate has to hold up on all views.
 
     PYTHONPATH=src python scripts/eval_external.py --pred-root DIR [--compare OTHER_DIR]
@@ -22,12 +22,13 @@ from pathlib import Path
 
 import numpy as np
 
-from mtah import io_idsse
+from mtah import io_idsse, io_metrica
 from mtah.evaluate import report
 from mtah.relabel import min_control
 
 OOF5 = ["J03WMX", "J03WN1", "J03WOH", "J03WOY", "J03WPY"]
 HOLDOUT = ["J03WQQ", "J03WR9"]
+METRICA = ["METRICA1", "METRICA2", "METRICA3"]   # second dev set: the target provider's own semantics
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -106,15 +107,20 @@ def main():
                     help="label views in s (default configs/labels.json eval_taus_s)")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1])
     ap.add_argument("--holdout", action="store_true")
+    ap.add_argument("--metrica", action="store_true",
+                    help="score the Metrica sample games (provider semantics) instead of the DFL matches")
     ap.add_argument("--locked", action="store_true",
                     help="required with --holdout: confirms the candidate is locked (captain only)")
     args = ap.parse_args()
     if args.holdout and not args.locked:
         raise SystemExit("holdout is scored once, by the captain, on the locked candidate: add --locked")
-    matches = HOLDOUT if args.holdout else OOF5
+    matches = METRICA if args.metrica else HOLDOUT if args.holdout else OOF5
     taus = args.taus or default_taus()
-    labels = {mid: [s.y for s in io_idsse.load(mid)] for mid in matches}
-    print(f"split={'holdout' if args.holdout else 'oof5'} label views tau={taus}s seeds={args.seeds} "
+    if args.metrica:
+        labels = {mid: [s.y for s in io_metrica.load(int(mid[-1]))] for mid in matches}
+    else:
+        labels = {mid: [s.y for s in io_idsse.load(mid)] for mid in matches}
+    print(f"split={'metrica' if args.metrica else 'holdout' if args.holdout else 'oof5'} label views tau={taus}s seeds={args.seeds} "
           f"(pred/gt, macroF1, aliveDeadF1, lat25 at tau={taus[len(taus) // 2]:g}s)")
     rows = table(args.pred_root, matches, args.seeds, taus, labels)
     mean = show(args.pred_root, rows)
