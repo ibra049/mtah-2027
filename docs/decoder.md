@@ -135,6 +135,9 @@ and 0.003 on harsh. The surface is flat: every configuration inside the plateau 
 | hard minimum durations inside the search instead of steps 4-5 | −0.003 | 0/5 |
 | pruning of short low-margin possessions | −0.008 | 1/5 |
 | Smart Tagging priors on simulated tags (restart, team, both; nominal and harsh tag noise; measured with `lgb_v2`) | −0.001 … +0.000 | 1–4/5 |
+| hard minimum for the restart possession, 12 / 25 frames (`lgb_v2`) | +0.000 / −0.000 | 5/5, 2/5 |
+| higher cost of stopping or of restarting (`lgb_v2`) | −0.000 | 3/5 |
+| team-change cost ×0.5 / ×2 / ×4 on frames without a ball observation (`lgb_v2`) | −0.001 / −0.001 / −0.003 | 2/5, 2/5, 1/5 |
 
 Tag priors were also tried with clean simulated tags and with four times the weight; the gain
 stayed within ±0.002 and stronger weights lost. The reason is visible in the error analysis: the

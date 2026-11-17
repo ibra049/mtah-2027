@@ -297,6 +297,21 @@ class Seq:
             self.ball = ball
 
 
+def test_blind_turn_cost_holds_the_team_through_an_occlusion():
+    # weak opposite-team evidence while the ball is unobserved: with a higher team-change cost on
+    # blind frames the possession is held; with the ball observed the same evidence is a change
+    p = proba((150, SURE_H), (60, (0.30, 0.55, 0.15)), (150, SURE_H))
+    ball = np.zeros((360, 3), np.float32)
+    seen = Seq(360, [], ball=ball.copy())
+    ball[140:220] = np.nan
+    blind = Seq(360, [], ball=ball)
+    cfg = dict(CFG, switch_cost=12000, min_poss=19, blind_turn_pct=300)
+    assert [lab for lab, _ in runs(dec.decode(p, seen, cfg))] == [H, A, H]
+    assert runs(dec.decode(p, blind, cfg)) == [(H, 360)]
+    assert [lab for lab, _ in runs(dec.decode(p, blind, dict(cfg, blind_turn_pct=100)))] == [H, A, H]
+    assert [lab for lab, _ in runs(dec.decode(p, None, cfg))] == [H, A, H]         # no ball track
+
+
 def test_phase_prior_weight_follows_the_ball_missing_gap():
     ball = np.zeros((400, 3), np.float32)
     ball[100:125] = np.nan            # 1 s gap  -> half weight (ramp 2 s)

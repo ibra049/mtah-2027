@@ -101,6 +101,8 @@ DEFAULTS = {
     "prune_margin_poss": 0,       # ... merged if their mean margin (milli-nats/frame) is below
     "prune_len_dead": 0,
     "prune_margin_dead": 0,
+    "blind_turn_pct": 100,        # percent of the team-change cost on frames without a ball
+                                  #   observation (needs seq.ball); 100 = no change
     "onset_gain": 0,              # percent; >0 makes a team change cheaper where aux[snap_key] fires
     "onset_ref": 0.02,            # onset level at which a team change costs exactly pen_turn
     "snap_radius": 0,             # frames; move a team change to the aux onset peak within +/- r
@@ -628,6 +630,11 @@ def decode(proba, seq=None, cfg=None, forced=None, aux=None) -> np.ndarray:
         pen_turn = cfg["pen_turn"]
         if int(cfg["onset_gain"]) > 0 and onset is not None:
             pen_turn = onset_turn_cost(onset, pen_turn, cfg["onset_gain"], cfg["onset_ref"])
+        ball = getattr(seq, "ball", None) if seq is not None else None
+        if int(cfg["blind_turn_pct"]) != 100 and ball is not None:
+            blind = np.isnan(np.asarray(ball)[:T, 0])
+            pen_turn = (np.broadcast_to(np.asarray(pen_turn, dtype=np.int64), (T,))
+                        * np.where(blind, int(cfg["blind_turn_pct"]), 100)) // 100
         out, _ = segment_viterbi(cost, pen_turn, cfg["pen_stop"], pen_restart,
                                  cfg["hard_min_turn"], cfg["hard_min_restart"],
                                  cfg["hard_min_dead"])

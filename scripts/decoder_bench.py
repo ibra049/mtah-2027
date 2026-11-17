@@ -51,6 +51,7 @@ SPLITS = {"oof5": dict(matches=OOF5, sub="oof", cache="cache"),
 CUR = dict(SPLITS["oof5"])                          # set from --split in main()
 PROFILES = ("nominal", "stoppage", "harsh")
 TAG_ROOT = "cache_tags_v2"       # simulated Smart Tagging with the target's window structure
+WITH_BALL = False                # --ball: hand the degraded ball track to decode() via seq.ball
 SEEDS = (0, 1)
 FPS = 25
 
@@ -78,7 +79,7 @@ def label_views(raw, taus):
             for t in taus}
 
 
-def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=None, tags=None):
+def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=None, tags=None, ball=None):
     """{(profile, seed): {match: [(proba, aux, tags, ball) per half]}}, complete matches only."""
     data, missing = {}, []
     matches = matches or CUR["matches"]
@@ -100,13 +101,14 @@ def load_source(model, profiles=PROFILES, seeds=SEEDS, matches=None, tags=None):
                     if fa.exists():
                         with np.load(fa) as z:
                             aux = {k: z[k] for k in z.files if k != "frame"}
-                    tg = ball = None
+                    tg = bl = None
                     if tags:
                         ft = EXT / TAG_ROOT / tags / str(seed) / f"{mid}_{p}.npy"
                         tg = np.load(ft) if ft.exists() else None
+                    if tags or ball or WITH_BALL:
                         with np.load(EXT / "cache_deg" / profile / str(seed) / f"{mid}_{p}.npz") as z:
-                            ball = z["ball"]
-                    halves.append((proba, aux, tg, ball))
+                            bl = z["ball"]
+                    halves.append((proba, aux, tg, bl))
                 got[mid] = halves
             if got:
                 data[(profile, seed)] = got
@@ -141,7 +143,8 @@ def predict(cfg, data, keys=None):
         for mid, halves in matches.items():
             preds = []
             for i, (proba, aux, tags, ball) in enumerate(halves):
-                seq = _Seq(_frame_axis(mid, i + 1), tags, ball) if tags is not None else None
+                seq = (_Seq(_frame_axis(mid, i + 1), tags, ball)
+                       if tags is not None or ball is not None else None)
                 preds.append(dec.decode(proba, seq, cfg, None, aux))
             out[key][mid] = preds
     return out
@@ -530,8 +533,13 @@ def main():
     sp.add_argument("--b", required=True, help="candidate config: json string or path")
     sp.add_argument("--tags", default=None)
     sp.add_argument("--split", default="oof5", choices=list(SPLITS))
+    for sp in sub.choices.values():
+        sp.add_argument("--ball", action="store_true",
+                        help="pass the degraded ball track to decode() (for blind_turn_pct)")
     args = ap.parse_args()
     CUR.update(SPLITS[getattr(args, "split", "oof5")])
+    global WITH_BALL
+    WITH_BALL = bool(getattr(args, "ball", False))
     return {"table": cmd_table, "grid": cmd_grid, "export": cmd_export, "synth": cmd_synth,
             "compare": cmd_compare, "stats": cmd_stats}[args.cmd](args)
 
