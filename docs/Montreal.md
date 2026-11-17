@@ -147,10 +147,21 @@ This makes the provided tracking and every external profile statistically alike 
 Features are team-symmetric (swapping home and away is an exact transform), direction-normalised
 per half, independent of slot identity, and never read ball height.
 
-**Frame model** (`mtah.model`, `models/lgb_v4`, 391 features; `docs/model.md`). LightGBM heads:
-- a **dead head** gives P(D);
-- a **team head** gives P(H | alive);
-- a **change head** gives a team-change onset signal.
+**Frame model** (`mtah.model`, `models/lgb_v4`; `docs/model.md`). 391 team-symmetric features,
+over past and future windows:
+- nearest-player distances to the ball;
+- control and touch events, with per-half quantile thresholds;
+- nearest-team hold times;
+- team shape;
+- speeds in the half's own scale.
+
+Three LightGBM heads read them:
+- **dead ball**, P(D);
+- **home versus away given alive**, P(H | alive);
+- **a team change within 5 frames**, the onset signal.
+
+The dead-ball head may not use touch timing, control clocks or per-half descriptors: on the
+provided tracking they made an earlier model cut live play.
 
 Training samples every 28th frame, and every 7th near team changes and in short possessions, for
 the team head. It swaps home and away with probability 0.5. Prediction averages both
@@ -225,6 +236,12 @@ Metrica = nominal draw unless noted.
   - short dead stretches inside the external envelope in both halves, the first shippable
     candidate to manage that (v1p, rejected, also did).
 - **v4q** is the drop-in replacement if the onset channel is ever in doubt.
+- **Negative finding: Metrica games in training.** Adding the provider's three sample games to
+  training raised the score on those games by 0.015–0.035 (leave-one-game-out) and left DFL
+  unchanged within noise (−0.003 to −0.006). We did not ship it. The gain was stoppage timing,
+  learned from a property of the sample product that the provided automatic tracking does not
+  offer: the ball is absent exactly while play is stopped, so three of four true stoppage edges
+  sit within half a second of a ball-gap edge.
 
 ## 9. Label-free transfer checks
 
@@ -266,13 +283,19 @@ prints aggregates only.
 
 ## 10. Limitations
 
-- **Where the remaining loss is** (lgb_v4, smoothed profiles, DFL out-of-fold, oracle repairs;
+- **Where the remaining loss is** (lgb_v4 before the stacker, plain decoder, smoothed profiles,
+  DFL out-of-fold, oracle repairs;
   `docs/model.md`). About three quarters of the gap to a perfect score is team identity:
   - 45–46% in possessions shorter than 2 s;
   - 29–30% in longer possessions given to the wrong team.
 
   The alive/dead decision accounts for 6–7%, and boundary timing and fragmentation for 18–19%.
-  Short possessions are lost where the tracker loses the ball at the touch itself.
+  - Possessions under 2 s are 27% of all possessions. Only 9% of those under 1 s, and about a
+    third of those lasting 1–2 s, are found.
+  - Most are absorbed by the neighbouring possession, and each miss also merges its two
+    neighbours.
+  - They are single touches, clearances and duels, where the tracker most often loses the ball
+    at the touch itself.
 - **Onset dependence.** v4p relies on its frame model's onset signal, which runs at about 0.9 of
   its external level on the provided tracking. Externally v4p stays ahead of v4q down to about
   half strength, and ahead of plain v4 down to about a quarter. v4q is the fallback.
