@@ -45,16 +45,9 @@ WINDOWS = (12, 50, 150)             # past / future aggregates: 0.5 s, 2 s, 6 s
 VOTE_WINDOWS = (25, 50, 125, 250)   # centred "which team is nearest" vote, as the baseline
 CTRL_RADII = (1.5, 3.0)             # m; "exclusive control": one team within r of the seen ball, the other not
 TOUCH_M = 3                         # frames each side of a frame for the ball's velocity before / after it
-# A touch is a jump of the ball's velocity that stands out of the half's own tracking noise:
-# threshold = clip(k * noise scale, floor, cap) in m/s, where the noise scale is the median
-# jump on a seen, moving ball (0.6-0.9 m/s on clean tracking, 4-6 m/s at 0.4 m of jitter).
-# Two streams: a sensitive one and a strict one (the trees see both and the half's noise scale).
-TOUCH_STREAMS = (("tch", 1.6, 3.5, 9.0), ("kick", 3.0, 5.0, 16.0))   # tag, k, floor, cap
-NOISE_MIN_SPEED = 1.5               # m/s: "moving ball" for the noise scale
-NOISE_DEFAULT = 3.0                 # m/s: noise scale when a half has too few seen frames to measure it
+TOUCH_DV = 7.0                      # m/s: velocity jump that counts as a touch (pass, shot, reception, deflection)
 TOUCH_REACH = 2.5                   # m: the nearest player must be this close to a seen touch
 HIDDEN_REACH = 4.0                  # m: ... and this close to a touch reconstructed inside a ball gap
-OUT_MARGIN = 3.0                    # m: objects further outside the pitch than this are not players in play
 TOUCH_COUNT_WINDOWS = (25, 50, 125)   # touches per team in the last / next 1, 2, 5 s
 EXTREME_WINDOW = 50
 REGIME_GAPS_S = (2, 4, 10)          # per-half share of ball-missing frames inside gaps at least this long
@@ -110,18 +103,6 @@ def attack_dir(seq: Sequence) -> float:
     if not len(d):
         return 1.0
     return 1.0 if float(np.median(d)) >= 0 else -1.0
-
-
-def _in_play(seq: Sequence) -> Sequence:
-    """Copy of seq without objects tracked more than OUT_MARGIN outside the pitch (substitutes
-    warming up behind a goal, staff, stray detections). Throw-in and corner takers stay."""
-    L, W = float(seq.pitch[0]), float(seq.pitch[1])
-    out = seq.copy()
-    for P in (out.home, out.away):
-        with np.errstate(invalid="ignore"):
-            off = (np.abs(P[..., 0]) > L / 2 + OUT_MARGIN) | (np.abs(P[..., 1]) > W / 2 + OUT_MARGIN)
-        P[off] = np.nan
-    return out
 
 
 def _row_mean(x):
@@ -209,7 +190,6 @@ def _team_block(P, bi, vb, dirn, L, W):
     f["touch"] = W / 2 - _fin(np.where(m, ay, -np.inf).max(1), True)     # <0: someone off the side
     f["goal"] = L / 2 - _fin(np.where(m, np.abs(x), -np.inf).max(1), True)
     inbox = m & (ay < BOX_HALF_WIDTH)
-    inbox &= np.abs(x) < L / 2 + 1.0                      # in the box, not behind the goal
     f["own_box"] = (inbox & (x < -L / 2 + BOX_DEPTH)).sum(1).astype(np.float32)
     f["opp_box"] = (inbox & (x > L / 2 - BOX_DEPTH)).sum(1).astype(np.float32)
     # motion
@@ -254,51 +234,37 @@ def _nearest(P, q):
     return np.where(np.isnan(d), np.inf, d).min(1) if P.shape[1] else np.full(len(q), np.inf)
 
 
-def ball_jump(ball, obs):
-    """(vbk, vfw, jump): velocity of the seen ball over the TOUCH_M frames ending / starting at
-    each frame, and the size of the difference (NaN unless t-m, t, t+m are all seen)."""
-    T = len(ball)
-    m = TOUCH_M
-    vbk = np.full((T, 2), np.nan, np.float32)
-    vfw = np.full((T, 2), np.nan, np.float32)
-    if T > m:
-        step = np.where((obs[m:] & obs[:-m])[:, None], (ball[m:] - ball[:-m]) * np.float32(FPS / m), np.nan)
-        vbk[m:] = step
-        vfw[:-m] = step
-    return vbk, vfw, _norm(vfw - vbk)
-
-
-def noise_scale(vfw, jump):
-    """Per-half noise scale of the velocity jump: its median on a seen, moving ball. Real touches
-    are a minority of frames, so this tracks the tracker's jitter, not the play."""
-    ok = ~np.isnan(jump) & (_norm(vfw) > NOISE_MIN_SPEED)
-    return float(np.median(jump[ok])) if ok.sum() >= 50 else NOISE_DEFAULT
-
-
-def touch_events(ball, obs, home, away, dh, da, thr, kin=None):
+def touch_events(ball, obs, home, away, dh, da):
     """Touches read off the ball track. -> dict of arrays sorted by frame:
     t (frame index), s (+1 home / -1 away), d (toucher's distance to the ball, m), od (the other
     team's nearest distance), mag (velocity jump, m/s), hid (1 = reconstructed inside a gap).
 
     Seen touch: the velocity over the TOUCH_M frames after a frame differs from the velocity
-    over the TOUCH_M frames before it by more than thr (local maximum), with a player within
+    over the TOUCH_M frames before it by more than TOUCH_DV (local maximum), with a player within
     TOUCH_REACH. dh / da: per-frame distance of the nearest home / away player to the ball.
 
     Hidden touch: the ball enters a gap with velocity v0 at p0 and leaves it G seconds later with
-    velocity v1 at p1, and v0 and v1 differ by more than thr. One touch at time tau explains it
-    if p0 + v0*tau + v1*(G - tau) = p1; tau is the least-squares solution clipped to the gap,
+    velocity v1 at p1, and v0 and v1 differ by more than TOUCH_DV. One touch at time tau explains
+    it if p0 + v0*tau + v1*(G - tau) = p1; tau is the least-squares solution clipped to the gap,
     the touch point is p0 + v0*tau, and the toucher is the nearest player to it at that frame
     (within HIDDEN_REACH).
     """
+    T = len(ball)
     m = TOUCH_M
-    vbk, vfw, jump = kin if kin is not None else ball_jump(ball, obs)
+    vbk = np.full((T, 2), np.nan, np.float32)       # velocity over the step ending at t
+    vfw = np.full((T, 2), np.nan, np.float32)       # velocity over the step starting at t
+    if T > m:
+        step = np.where((obs[m:] & obs[:-m])[:, None], (ball[m:] - ball[:-m]) * np.float32(FPS / m), np.nan)
+        vbk[m:] = step
+        vfw[:-m] = step
+    jump = _norm(vfw - vbk)
     jf = np.where(np.isnan(jump), -1.0, jump)
     peak = jf.copy()
     for k in range(1, m + 1):
         peak[k:] = np.maximum(peak[k:], jf[:-k])
         peak[:-k] = np.maximum(peak[:-k], jf[k:])
     dmin = np.fmin(dh, da)
-    seen = np.flatnonzero((jf >= peak) & (jf > thr) & (dmin < TOUCH_REACH))
+    seen = np.flatnonzero((jf >= peak) & (jf > TOUCH_DV) & (dmin < TOUCH_REACH))
     ev = {"t": seen, "s": np.sign(da[seen] - dh[seen]), "d": dmin[seen],
           "od": np.fmax(dh[seen], da[seen]), "mag": jf[seen], "hid": np.zeros(len(seen))}
     # hidden touches, one candidate per interior gap
@@ -316,7 +282,7 @@ def touch_events(ball, obs, home, away, dh, da, thr, kin=None):
         tau = np.clip(tau, 0.0, G)
         q = p0 + v0 * tau[:, None]
         tq = np.clip(l + np.rint(tau * FPS).astype(np.int64), l + 1, n - 1)
-        keep = np.flatnonzero(~np.isnan(mag) & (mag > thr) & (n - l >= 2))
+        keep = np.flatnonzero(~np.isnan(mag) & (mag > TOUCH_DV) & (n - l >= 2))
         tq, q, mag = tq[keep], q[keep], mag[keep]
         qh, qa = _nearest(home[tq], q), _nearest(away[tq], q)
         near = np.fmin(qh, qa) < HIDDEN_REACH
@@ -348,9 +314,8 @@ def _team_event_clock(c, tag, hev, aev, t, T):
     c[f"n_{tag}_tnext"] = np.minimum(tn["h"], tn["a"])
 
 
-def _touch_features(c, ev, t, T, tag="tch", scale=1.0):
-    """Last / next touches seen from every frame, and touches per team in short windows.
-    Magnitudes are in units of the half's noise scale."""
+def _touch_features(c, ev, t, T):
+    """Last / next touches seen from every frame, and touches per team in short windows."""
     ne = len(ev["t"])
     et = ev["t"].astype(np.int64)
     j = np.searchsorted(et, t, side="right") - 1     # last touch at or before t
@@ -358,25 +323,25 @@ def _touch_features(c, ev, t, T, tag="tch", scale=1.0):
         ok = (idx >= 0) & (idx < ne)
         k = np.clip(idx, 0, max(ne - 1, 0))
         g = (lambda a, fill: np.where(ok, a[k], fill)) if ne else (lambda a, fill: np.full(T, fill))
-        c[f"d_{tag}_{name}"] = g(ev["s"], 0.0)
-        c[f"n_{tag}_t{name}"] = np.minimum(np.abs(g(et, 10 ** 9) - t) / FPS, T_CAP_S)
+        c[f"d_tch_{name}"] = g(ev["s"], 0.0)
+        c[f"n_tch_t{name}"] = np.minimum(np.abs(g(et, 10 ** 9) - t) / FPS, T_CAP_S)
         if name in ("last", "next"):
-            c[f"n_{tag}_{name}_d"] = g(ev["d"], np.nan)
-            c[f"n_{tag}_{name}_od"] = g(ev["od"], np.nan)
-            c[f"n_{tag}_{name}_mag"] = g(np.minimum(ev["mag"] / scale, 20.0), np.nan)
-            c[f"n_{tag}_{name}_hid"] = g(ev["hid"], np.nan)
+            c[f"n_tch_{name}_d"] = g(ev["d"], np.nan)
+            c[f"n_tch_{name}_od"] = g(ev["od"], np.nan)
+            c[f"n_tch_{name}_mag"] = g(np.minimum(ev["mag"], 2 * BALL_SPEED_CAP), np.nan)
+            c[f"n_tch_{name}_hid"] = g(ev["hid"], np.nan)
     hev = np.zeros(T, bool)
     aev = np.zeros(T, bool)
     hev[et[ev["s"] > 0]] = True
     aev[et[ev["s"] < 0]] = True
-    _team_event_clock(c, tag, hev, aev, t, T)
+    _team_event_clock(c, "tch", hev, aev, t, T)
     cs = {"h": np.concatenate([[0], np.cumsum(hev)]), "a": np.concatenate([[0], np.cumsum(aev)])}
     for w in TOUCH_COUNT_WINDOWS:
-        for win, a, b in ((f"p{w}", np.clip(t - w + 1, 0, T), t + 1),
+        for tag, a, b in ((f"p{w}", np.clip(t - w + 1, 0, T), t + 1),
                           (f"f{w}", t + 1, np.clip(t + w + 1, 0, T))):
             n = {side: (cs[side][b] - cs[side][a]).astype(np.float32) for side in "ha"}
-            c[f"h_{tag}_{win}"], c[f"a_{tag}_{win}"] = n["h"], n["a"]
-            c[f"d_{tag}_{win}"] = n["h"] - n["a"]
+            c[f"h_tch_{tag}"], c[f"a_tch_{tag}"] = n["h"], n["a"]
+            c[f"d_tch_{tag}"] = n["h"] - n["a"]
 
 
 # paired features that also get an explicit h-minus-a column
@@ -400,7 +365,6 @@ def compute(seq: Sequence):
 def _compute(seq):
     T = len(seq)
     L, W = float(seq.pitch[0]), float(seq.pitch[1])
-    seq = _in_play(seq)
     dirn = attack_dir(seq)
     ball = np.asarray(seq.ball[:, :2], np.float32)        # height is never read
     obs = ~np.isnan(ball).any(1)
@@ -495,21 +459,10 @@ def _compute(seq):
             c[f"d_{tag}_p{wlen}"] = _win_mean(x, -wlen, -1)
             c[f"d_{tag}_f{wlen}"] = _win_mean(x, 1, wlen)
 
-    # Touches: the possession label flips at the new team's first touch, so "team of the last
-    # touch" is close to the truth. Thresholds are relative to the half's own tracking noise.
-    kin = ball_jump(ball, obs)
-    jscale = max(noise_scale(kin[1], kin[2]), 0.1)
-    c["n_reg_jscale"] = np.full(T, jscale)               # regime: how jittery the ball track is
-    q10 = c["n_sp_q10"]
-    c["n_reg_pjit"] = np.full(T, float(np.quantile(q10[~np.isnan(q10)], 0.1))
-                              if (~np.isnan(q10)).any() else np.nan)   # ... and the player tracks
-    c["n_jump_rel"] = np.minimum(kin[2] / jscale, 20.0)  # velocity jump of the seen ball, in noise units
-    c["n_bdv_rel"] = np.minimum(bdv / jscale, 20.0)
-    dh_seen, da_seen = np.where(obs, fh["d1"], np.nan), np.where(obs, fa["d1"], np.nan)
-    for tag, kk, floor, cap in TOUCH_STREAMS:
-        thr = min(max(kk * jscale, floor), cap)
-        ev = touch_events(ball, obs, seq.home, seq.away, dh_seen, da_seen, thr, kin)
-        _touch_features(c, ev, t, T, tag, jscale)
+    # Touches: under fine labels the truth is close to "team of the last controlled touch".
+    ev = touch_events(ball, obs, seq.home, seq.away,
+                      np.where(obs, fh["d1"], np.nan), np.where(obs, fa["d1"], np.nan))
+    _touch_features(c, ev, t, T)
 
     # last-seen / next-seen snapshots (equal to the current frame while the ball is seen)
     kb = BALL_LAG
@@ -536,7 +489,7 @@ def _compute(seq):
     c["n_gap_speed"] = np.where(obs, np.nan, disp / np.maximum((nxt - last) / FPS, 1.0 / FPS))
 
     # multiscale past / future means
-    base = ["n_obs", "n_bspeed", "n_btouch", "n_bgoal", "n_bdv", "n_bdv_rel", "n_dmin", "n_sp_mean", "n_slow",
+    base = ["n_obs", "n_bspeed", "n_btouch", "n_bgoal", "n_bdv", "n_dmin", "n_sp_mean", "n_slow",
             "d_d1", "d_closer", "d_terr", "d_blockv", "d_bx", "d_sy", "d_behind", "d_sp_mean",
             "h_d1", "a_d1"]
     for name in base:
