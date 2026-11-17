@@ -1,0 +1,14 @@
+{
+  "_doc": "Candidate v2: lgb_v2 frame model (touch and control events, regime descriptors; trained on nominal, stoppage and harsh draws) + the frozen decoder configs/decoder.json (re-gridded on lgb_v2: unchanged), kickoff rule on.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {
+    "module": "mtah.model",
+    "artefact": "models/lgb_v2"
+  },
+  "decoder": {
+    "module": "mtah.decode",
+    "cfg_path": "configs/decoder.json"
+  }
+}
