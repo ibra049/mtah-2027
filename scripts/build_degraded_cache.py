@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-from mtah import degrade, io_idsse
+from mtah import degrade, io_idsse, io_metrica
 from mtah.canonical import D
 
 OUT = io_idsse.ROOT.parent / "cache_deg"
@@ -25,8 +25,14 @@ def build(profile, seed, match_id, period, force=False):
     if npz.exists() and meta_path.exists() and not force:
         return None
     t = time.time()
-    seq = io_idsse.Sequence.load(io_idsse.cache_path(match_id, period))
+    metrica = match_id.startswith("METRICA")
+    src = io_metrica.cache_path(int(match_id[7:]), period) if metrica else io_idsse.cache_path(match_id, period)
+    seq = io_idsse.Sequence.load(src)
     cfg = degrade.load_profile(profile)
+    if metrica:
+        # Metrica sample tracking already lacks the ball in stoppages: keep it; dropout on top is
+        # solved on ALIVE frames to ball_missing_frac. The dead/alive ratio is not controlled.
+        cfg["ball_target_alive"] = True
     deg, drawn = degrade.degraded_profile(seq, cfg, seed)
     miss = np.isnan(deg.ball[:, 0])
     dead = seq.y == D
@@ -43,7 +49,12 @@ def build(profile, seed, match_id, period, force=False):
     meta = {"profile": profile, "seed": seed, "match_id": match_id, "period": period,
             "drawn": drawn, "fixed": {k: cfg[k] for k in ("ball_missing_frac", "player_missing_frac",
                                                           "slots_per_team", "drop_ball_z")},
-            "summary": summ, "labels": "clean DFL y (raw); apply relabel.min_control(y, tau)",
+            "summary": summ,
+            "labels": ("Metrica event-chain labels (provider semantics, io_metrica); scoring only, not training"
+                       if metrica else "clean DFL y (raw); apply relabel.min_control(y, tau)"),
+            "ball_dropout": ("clean Metrica ball gaps kept (missing in stoppages); dropout added on top so "
+                             "ball missing on ball_missing_frac of ALIVE frames; dead/alive ratio not controlled"
+                             if metrica else "overall missing = ball_missing_frac; dead/alive ratio drawn"),
             "seconds": round(time.time() - t, 1)}
     meta_path.write_text(json.dumps(meta, indent=1, sort_keys=True))
     return meta
