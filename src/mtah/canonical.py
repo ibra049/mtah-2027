@@ -64,3 +64,10 @@ class Sequence:
             return cls(str(z["match_id"]), int(z["period"]), z["frame"], z["ball"], z["home"],
                        z["away"], z["pitch"], z["y"], z["tags"] if "tags" in z.files else None,
                        extra)
+
+
+# Smart Tagging intervals (lane target-io). Global video frames, end exclusive
+# (start = round(start_s * 25), end = round(end_s * 25), as starter/load_smart_tagging.py).
+# team: H (Barcelona), A (Athletic), N (N/A), ? (missing/unknown). type/half: raw tag text.
+TAG_DTYPE = np.dtype([("start", "i8"), ("end", "i8"), ("code", "U64"), ("team", "U1"),
+                      ("type", "U64"), ("half", "U16")])
