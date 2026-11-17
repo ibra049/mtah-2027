@@ -20,5 +20,5 @@
     "num_threads": 4
   },
   "_rounds": "Fixed boosting rounds per head (no early stopping inside a fold, so out-of-fold predictions never see their own match).",
-  "rounds": {"dead": 400, "team": 400}
+  "rounds": {"dead": 400, "team": 400, "change": 300}
 }

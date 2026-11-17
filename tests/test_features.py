@@ -130,3 +130,8 @@ def test_windows_are_past_and_future(seq, XN):
     bt = col["n_btouch"]
     assert col["n_btouch_pmin50"][t] == pytest.approx(np.nanmin(bt[t - 50:t]))
     assert col["n_btouch_fmin50"][t] == pytest.approx(np.nanmin(bt[t + 1:t + 51]))
+
+
+def test_rounded_to_1e4(XN):
+    X, _ = XN
+    np.testing.assert_array_equal(np.round(X.astype(np.float64), 4).astype(np.float32), X)

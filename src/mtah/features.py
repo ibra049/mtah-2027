@@ -21,6 +21,9 @@ augmentation is exact (tests/test_features.py). Lateral position enters only thr
 x only through the attack frame, so pitch mirroring changes nothing either.
 
 No time-from-kick-off feature: the target's graded blocks do not start at the kick-off.
+
+Portability: only + - * / sqrt, comparisons, sorting and sequential cumulative sums are used
+(no exp/log/trig), and every column is rounded to 1e-4.
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ NEAR_RADII = (3.0, 8.0)
 WINDOWS = (12, 50, 150)             # past / future aggregates: 0.5 s, 2 s, 6 s
 VOTE_WINDOWS = (25, 50, 125, 250)   # centred "which team is nearest" vote, as the baseline
 EXTREME_WINDOW = 50
+DECIMALS = 4                        # features are rounded to 1e-4 (portability)
 
 
 # ------------------------------------------------------------------ swap helpers
@@ -229,7 +233,8 @@ def compute(seq: Sequence):
     names = list(cols)
     X = np.empty((len(seq), len(names)), np.float32)
     for i, n in enumerate(names):
-        X[:, i] = cols[n]
+        # rounded to 1e-4 so the last bits of platform arithmetic never reach a tree split
+        X[:, i] = np.round(np.asarray(cols[n], np.float64), DECIMALS)
     X[np.isinf(X)] = np.nan
     return X, names
 
