@@ -86,7 +86,7 @@ def compare(target, reference):
 def report_lines(target_stats, ref):
     """Aggregate-only lines (safe to print behind SAFE|)."""
     lines, close = [], {}
-    for prof in PROFILES:
+    for prof in ref["profiles"]:
         c = compare(target_stats, ref["profiles"][prof])
         close[prof] = c["median_abs_shift"]
         lines.append(f"drift profile={prof} features={c['n']} median_outside_5_95={c['n_outside']} "
@@ -107,11 +107,11 @@ def _external_seqs(profile):
             for m in OOF5 for sd in (0, 1) for p in (1, 2))
 
 
-def build_reference(names=None, meta=MODEL_META, ref=REF):
+def build_reference(names=None, meta=MODEL_META, ref=REF, profiles=PROFILES):
     names = names or model_names(meta)
     out = {"names": names, "stride": STRIDE, "matches": OOF5, "seeds": [0, 1], "quantiles": list(QS),
            "model_meta": str(meta), "profiles": {}}
-    for prof in PROFILES:
+    for prof in profiles:
         X = feature_matrix(_external_seqs(prof), names)
         out["profiles"][prof] = stats_from_matrix(X, names)
         print(f"reference {prof}: rows={len(X)} features={len(names)}", flush=True)
@@ -144,10 +144,11 @@ def main(argv=None):
     ap.add_argument("--target", action="store_true")
     ap.add_argument("--model-meta", default=str(MODEL_META), help="model whose feature list is used")
     ap.add_argument("--ref", default=str(REF), help="reference JSON (written by --build-reference)")
+    ap.add_argument("--profiles", default=",".join(PROFILES), help="reference profiles (build only)")
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     a = ap.parse_args(argv)
     if a.build_reference:
-        build_reference(meta=Path(a.model_meta), ref=Path(a.ref))
+        build_reference(meta=Path(a.model_meta), ref=Path(a.ref), profiles=tuple(a.profiles.split(",")))
     if a.check_external:
         check_external(a.check_external, a.ref)
     if a.target:
