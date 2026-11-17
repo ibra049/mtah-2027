@@ -47,7 +47,7 @@ output is deterministic: the same bundle and repository give the same bytes. Exp
 
 <!-- updated by the captain at each candidate, together with configs/final.json -->
 ```
-EXPECTED_SHA256  678aa2d4bae99a79b478e6275257b3cbac464d55bcdc778eabf9dea1f05c84da   configs/final.json = fallback (official smooth50 baseline)
+EXPECTED_SHA256  31839e5696ba1f6f1349abd711ba0176aa7a61be4fb8ed13f9dc32725ae1f4a1   configs/final.json = candidate v1 (lgb_v1 + frozen decoder); fallback configs/fallback_baseline.json gives 678aa2d4bae99a79b478e6275257b3cbac464d55bcdc778eabf9dea1f05c84da
 ```
 
 ## Run the tests
