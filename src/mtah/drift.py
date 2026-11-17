@@ -36,12 +36,25 @@ def model_names(meta=MODEL_META):
     return json.loads(Path(meta).read_text())["names"]
 
 
-def feature_matrix(seqs, names, stride=STRIDE):
-    """Stack features of the given sequences, every `stride`-th frame, columns in `names` order."""
+def model_feature_version(meta=MODEL_META):
+    """Feature-set version the model was trained with (meta.json), as mtah.model resolves it."""
+    from .model import LEGACY_FEATURE_VERSION
+    return int(json.loads(Path(meta).read_text()).get("feature_version", LEGACY_FEATURE_VERSION))
+
+
+def ref_version(ref):
+    """References built before versions were recorded are feature version 2 (lgb_v1, lgb_v2)."""
+    from .model import LEGACY_FEATURE_VERSION
+    return int(ref.get("feature_version", LEGACY_FEATURE_VERSION))
+
+
+def feature_matrix(seqs, names, stride=STRIDE, version=None):
+    """Stack features of the given sequences, every `stride`-th frame, columns in `names` order,
+    computed with the given feature-set version (None: the code's current default)."""
     from .features import compute
     out = []
     for s in seqs:
-        X, nm = compute(s)
+        X, nm = compute(s) if version is None else compute(s, version)
         idx = [nm.index(n) for n in names]
         out.append(X[::stride][:, idx])
         del X
@@ -86,7 +99,7 @@ def compare(target, reference):
 def report_lines(target_stats, ref):
     """Aggregate-only lines (safe to print behind SAFE|)."""
     lines, close = [], {}
-    for prof in PROFILES:
+    for prof in ref["profiles"]:
         c = compare(target_stats, ref["profiles"][prof])
         close[prof] = c["median_abs_shift"]
         lines.append(f"drift profile={prof} features={c['n']} median_outside_5_95={c['n_outside']} "
@@ -107,12 +120,13 @@ def _external_seqs(profile):
             for m in OOF5 for sd in (0, 1) for p in (1, 2))
 
 
-def build_reference(names=None, meta=MODEL_META, ref=REF):
+def build_reference(names=None, meta=MODEL_META, ref=REF, profiles=PROFILES):
     names = names or model_names(meta)
-    out = {"names": names, "stride": STRIDE, "matches": OOF5, "seeds": [0, 1], "quantiles": list(QS),
-           "model_meta": str(meta), "profiles": {}}
-    for prof in PROFILES:
-        X = feature_matrix(_external_seqs(prof), names)
+    version = model_feature_version(meta)
+    out = {"names": names, "feature_version": version, "stride": STRIDE, "matches": OOF5, "seeds": [0, 1],
+           "quantiles": list(QS), "model_meta": str(meta), "profiles": {}}
+    for prof in profiles:
+        X = feature_matrix(_external_seqs(prof), names, version=version)
         out["profiles"][prof] = stats_from_matrix(X, names)
         print(f"reference {prof}: rows={len(X)} features={len(names)}", flush=True)
         del X
@@ -122,7 +136,8 @@ def build_reference(names=None, meta=MODEL_META, ref=REF):
 
 def check_external(profile, ref_path=REF):
     ref = json.loads(Path(ref_path).read_text())
-    st = stats_from_matrix(feature_matrix(_external_seqs(profile), ref["names"]), ref["names"])
+    st = stats_from_matrix(feature_matrix(_external_seqs(profile), ref["names"], version=ref_version(ref)),
+                           ref["names"])
     for line in report_lines(st, ref):
         print(line)
 
@@ -131,7 +146,7 @@ def target_main(data_dir, ref_path=REF):
     from . import io_target
     ref = json.loads(Path(ref_path).read_text())
     seqs = io_target.load(data_dir, with_tags=False)
-    st = stats_from_matrix(feature_matrix(seqs, ref["names"]), ref["names"])
+    st = stats_from_matrix(feature_matrix(seqs, ref["names"], version=ref_version(ref)), ref["names"])
     del seqs
     for line in report_lines(st, ref):
         print("SAFE| " + line, flush=True)
@@ -144,10 +159,11 @@ def main(argv=None):
     ap.add_argument("--target", action="store_true")
     ap.add_argument("--model-meta", default=str(MODEL_META), help="model whose feature list is used")
     ap.add_argument("--ref", default=str(REF), help="reference JSON (written by --build-reference)")
+    ap.add_argument("--profiles", default=",".join(PROFILES), help="reference profiles (build only)")
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     a = ap.parse_args(argv)
     if a.build_reference:
-        build_reference(meta=Path(a.model_meta), ref=Path(a.ref))
+        build_reference(meta=Path(a.model_meta), ref=Path(a.ref), profiles=tuple(a.profiles.split(",")))
     if a.check_external:
         check_external(a.check_external, a.ref)
     if a.target:
