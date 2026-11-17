@@ -17,3 +17,5 @@ outputs/
 
 # overnight coordination logs (local only)
 coord/
+.venv
+.venv.icloud-old/
