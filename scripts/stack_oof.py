@@ -6,11 +6,16 @@ frame model's export, so scripts/decoder_bench.py and scripts/eval_external.py r
 
     ~/mtah-external/preds/<name>/oof/<profile>_<seed>/<MATCH>_<P>.npz   (proba, frame) + aux/
 
-    PYTHONPATH=src python scripts/stack_oof.py --base lgb_v2 --name lgb_v2s [--metrica] [--save DIR]
+    PYTHONPATH=src python scripts/stack_oof.py --base lgb_v2 --name lgb_v2s \
+        --metrica --holdout --save models/stack_lgb_v2          # one command per base model
+
+Every <profile>_<seed> folder the base model exported is used, whatever the profile set.
 
 --metrica also fits one stacker on all 5 matches and predicts the Metrica sample games (scoring
-only; never used for fitting). --save writes that all-match booster (the one a target run uses).
-The holdout matches are never read.
+only; never used for fitting). --save DIR writes that all-match booster with features.txt and
+meta.json: the artefact mtah.model_stacked loads for a target run.
+--holdout writes stacked predictions for the holdout matches with that same all-match stacker;
+their labels are never read or scored here (the captain scores them once, on the locked candidate).
 """
 import argparse
 import shutil
@@ -26,8 +31,19 @@ from mtah.relabel import min_control
 EXT = Path.home() / "mtah-external"
 OOF5 = ["J03WMX", "J03WN1", "J03WOH", "J03WOY", "J03WPY"]
 METRICA = ["METRICA1", "METRICA2", "METRICA3"]
-FOLDERS = [f"{p}_{s}" for p in ("nominal", "stoppage", "harsh") for s in (0, 1)]
+HOLDOUT = ["J03WQQ", "J03WR9"]
 FPS = 25
+
+
+def folders_of(base, sub):
+    """<profile>_<seed> folders the base model exported under `sub` (any degradation profile)."""
+    root = EXT / "preds" / base / sub
+    out = []
+    for d in sorted(root.iterdir()) if root.exists() else []:
+        profile, _, seed = d.name.rpartition("_")
+        if d.is_dir() and profile and (EXT / "cache_deg" / profile / seed).is_dir():
+            out.append(d.name)
+    return out
 
 
 def load_half(base, sub, folder, mid, p):
@@ -68,24 +84,31 @@ def main():
     ap.add_argument("--rounds", type=int, default=200)
     ap.add_argument("--tau", type=float, default=0.5, help="training label view (s)")
     ap.add_argument("--weight", choices=("none", "spell"), default="none")
+    ap.add_argument("--features", choices=("full", "proba"), default="full",
+                    help="proba: the frame model's own outputs only (no ball cues, no margin)")
     ap.add_argument("--metrica", action="store_true")
+    ap.add_argument("--holdout", action="store_true",
+                    help="also write stacked predictions for the holdout matches (never scored here)")
     ap.add_argument("--save", default=None)
     args = ap.parse_args()
     cfg = {"num_boost_round": args.rounds}
+    use_cues = args.features == "full"
     rng = np.random.default_rng(20271117)
     t0 = time.time()
 
     # 1. subsampled training rows per (match, folder, half)
     rows = {m: [] for m in OOF5}
     sign = names = None
+    train_folders = folders_of(args.base, "oof")
+    print(f"base={args.base} folders={train_folders}", flush=True)
     for mid in OOF5:
-        for folder in FOLDERS:
+        for folder in train_folders:
             for p in (1, 2):
                 got = load_half(args.base, "oof", folder, mid, p)
                 if got is None:
                     continue
                 proba, onset, _, seq = got
-                X, names, sign = stack.features(proba, onset, seq)
+                X, names, sign = stack.features(proba, onset, seq, use_cues)
                 y = min_control(seq.y, int(round(args.tau * FPS)))
                 keep = np.flatnonzero((rng.random(len(y)) < 1.0 / args.every) & (y >= 0))
                 w = spell_weight(y, 125)[keep] if args.weight == "spell" else None
@@ -101,16 +124,17 @@ def main():
 
     def write(booster, sub, matches):
         for mid in matches:
-            for folder in FOLDERS:
+            for folder in folders_of(args.base, sub):
                 for p in (1, 2):
                     got = load_half(args.base, sub, folder, mid, p)
                     if got is None:
                         continue
                     proba, onset, frame, seq = got
-                    X, _, _ = stack.features(proba, onset, seq)
+                    X, _, _ = stack.features(proba, onset, seq, use_cues)
                     out = EXT / "preds" / args.name / sub / folder / f"{mid}_{p}.npz"
                     out.parent.mkdir(parents=True, exist_ok=True)
-                    np.savez_compressed(out, proba=stack.predict_proba(booster, X), frame=frame)
+                    np.savez_compressed(out, proba=stack.predict_proba(booster, X, num_threads=4),
+                                        frame=frame)
                     src = EXT / "preds" / args.base / sub / folder / "aux" / f"{mid}_{p}.npz"
                     if src.exists():
                         (out.parent / "aux").mkdir(exist_ok=True)
@@ -125,15 +149,24 @@ def main():
         print(f"fold {held} done ({time.time() - t0:.0f}s)", flush=True)
 
     # 3. all-match stacker: Metrica predictions and the artefact a target run would use
-    if args.metrica or args.save:
+    if args.metrica or args.save or args.holdout:
         X, y, w = table(OOF5)
         booster = stack.fit(X, y, sign, cfg, weight=w)
         if args.metrica:
             write(booster, "metrica", METRICA)
+        if args.holdout:
+            write(booster, "holdout", HOLDOUT)
         if args.save:
+            from mtah import model_stacked
             Path(args.save).mkdir(parents=True, exist_ok=True)
             booster.save_model(str(Path(args.save) / "stack.txt"))
-            (Path(args.save) / "features.txt").write_text("\n".join(names) + "\n")
+            model_stacked.write_meta(
+                args.save, names, base_module="mtah.model", base_artefact=f"models/{args.base}",
+                onset_key="turn_onset", use_cues=use_cues, fitted_on=OOF5, folders=train_folders, rows=int(len(y)),
+                every=args.every, rounds=args.rounds, label_tau_s=args.tau, weight=args.weight,
+                params={k: v for k, v in stack.DEFAULT_CFG.items()},
+                note="fitted on leave-one-match-out out-of-fold probabilities of the base model; "
+                     "holdout matches and the target never read")
         print(f"all-match stacker done ({time.time() - t0:.0f}s)", flush=True)
     imp = booster.feature_importance("gain")
     top = np.argsort(-imp)[:15]

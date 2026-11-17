@@ -1,0 +1,45 @@
+{
+ "base_artefact": "models/lgb_v1",
+ "base_module": "mtah.model",
+ "every": 8,
+ "features_sha256": "661debb85266c28d049d013627ba752e8b57a69c08f9246df88e1a4111a9e441",
+ "fitted_on": [
+  "J03WMX",
+  "J03WN1",
+  "J03WOH",
+  "J03WOY",
+  "J03WPY"
+ ],
+ "folders": [
+  "harsh_0",
+  "harsh_1",
+  "nominal_0",
+  "nominal_1"
+ ],
+ "label_tau_s": 0.5,
+ "n_features": 79,
+ "note": "fitted on leave-one-match-out out-of-fold probabilities of the base model; holdout matches and the target never read",
+ "onset_key": "turn_onset",
+ "params": {
+  "bagging_fraction": 0.7,
+  "bagging_freq": 1,
+  "deterministic": true,
+  "feature_fraction": 0.7,
+  "force_row_wise": true,
+  "lambda_l2": 1.0,
+  "learning_rate": 0.1,
+  "min_data_in_leaf": 200,
+  "num_boost_round": 200,
+  "num_class": 3,
+  "num_leaves": 63,
+  "num_threads": 4,
+  "objective": "multiclass",
+  "seed": 20271117,
+  "verbose": -1
+ },
+ "rounds": 200,
+ "rows": 356129,
+ "stack_sha256": "c3176dde119913047272beb98817b1eae99fb7f04131fb00c909883203d5fba7",
+ "use_cues": false,
+ "weight": "none"
+}
