@@ -1,0 +1,4 @@
+{
+  "_doc": "Training/eval label definition for external DFL data. See docs/label_semantics.md. min_control_tau_s from CHALLENGE.md text ('a player keeps the ball for a few seconds'), never fitted to target GT.",
+  "min_control_tau_s": 2.0
+}
