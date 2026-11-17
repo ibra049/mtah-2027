@@ -65,7 +65,9 @@ at `vendor/challenge/`.
 
 Training and tuning use **only** the open IDSSE matches (DFL/Sportec, CC BY 4.0) and the Metrica
 sample games. Nothing from the provided match is used. Put the downloaded IDSSE files in
-`~/mtah-external/idsse/` (or set `MTAH_EXTERNAL`). Then:
+`~/mtah-external/idsse/`. The retraining scripts read caches and predictions under
+`~/mtah-external/` (only the parsers also accept `MTAH_EXTERNAL`). Regenerating the submission
+needs none of this. Then:
 
 ```bash
 export PYTHONPATH=src
