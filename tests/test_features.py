@@ -305,19 +305,65 @@ def test_objects_far_outside_the_pitch_are_ignored(seq, XN):
 
 
 def test_relative_kinematics_have_a_twin_for_every_raw_column(seq, XN):
-    """Speeds in units of the half's own scale equal raw / scale, and every absolute-unit
-    kinematic column listed in RAW_KINEMATICS has such a twin (so it can be dropped)."""
+    """Every absolute-unit kinematic column listed in RAW_KINEMATICS has a "_rel" twin (so a
+    model for another tracking provider can drop the raw ones)."""
     import re
     X, names = XN
     col = dict(zip(names, X.T))
-    assert col["n_sp_mean_rel"][300] == pytest.approx(col["n_sp_mean"][300] / col["n_reg_spscale"][0], abs=2e-4)
     assert col["d_blockv_rel"][300] == pytest.approx(col["d_blockv"][300] / col["n_reg_spscale"][0], abs=2e-4)
     raw = [n for n in names if any(re.search(p, n) for p in features.RAW_KINEMATICS)]
     assert len(raw) > 30
-    for n in raw:                                   # every raw column has its relative twin
+    for n in raw:
         base = re.sub(r"(_[pf]\d+)?$", "", n)
         tail = n[len(base):]
         assert base + "_rel" + tail in names, n
+
+
+def test_speed_floor_makes_standing_and_jittering_players_equal():
+    """Players that stand still (smooth tracker) and players that jitter on the spot by 0.2 m
+    (noisy tracker) give the same "_rel" speed statistics; the raw ones differ."""
+    from mtah.canonical import Sequence
+    T, K = 600, 11
+    rng = np.random.default_rng(3)
+    spots = np.stack([rng.uniform(-45, 45, (2, K)), rng.uniform(-30, 30, (2, K))], -1).astype(np.float32)
+    spots[0, :, 0] -= 5                       # home a little behind away: a defined attack direction
+    out = {}
+    for name, sigma in (("still", 0.0), ("jitter", 0.2)):
+        e = np.cumsum(rng.normal(0, 1, (T + 20, 2, K, 2)), 0)
+        wander = ((e[20:] - e[:-20]) / np.sqrt(20) * sigma).astype(np.float32)
+        ball = np.zeros((T, 3), np.float32)
+        s = Sequence("F", 1, np.arange(T, dtype=np.int64), ball, spots[0] + wander[:, 0],
+                     spots[1] + wander[:, 1], np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+        X, names = features.compute(s)
+        out[name] = dict(zip(names, X.T))
+    mid = slice(50, 550)
+    assert np.nanmean(out["jitter"]["n_sp_mean"][mid]) > np.nanmean(out["still"]["n_sp_mean"][mid]) + 0.2
+    for n in ("n_sp_mean_rel", "n_sp_q10_rel", "n_sp_med_rel", "h_sp_mean_rel", "a_sp_q25_rel"):
+        np.testing.assert_allclose(np.nanmean(out["jitter"][n][mid]), np.nanmean(out["still"][n][mid]),
+                                   rtol=0.03, atol=0.03, err_msg=n)
+    # the slow share only loses the tail of the jitter above the floor
+    assert np.nanmean(out["still"]["n_slow_rel"][mid]) == pytest.approx(1.0)
+    assert np.nanmean(out["jitter"]["n_slow_rel"][mid]) > 0.8
+
+
+def test_movement_coherence():
+    """Everyone moving the same way: coherence near 1; everyone drifting at random: near 0."""
+    from mtah.canonical import Sequence
+    T, K = 400, 11
+    rng = np.random.default_rng(4)
+    base = np.stack([rng.uniform(-30, 0, (2, K)), rng.uniform(-25, 25, (2, K))], -1).astype(np.float32)
+    base[1, :, 0] += 8
+    t = np.arange(T, dtype=np.float32)[:, None, None]
+    shift = np.concatenate([t * (3.0 / 25), 0 * t], 2)                    # 3 m/s along x for all
+    ball = np.zeros((T, 3), np.float32)
+    mk = lambda h, a: Sequence("C", 1, np.arange(T, dtype=np.int64), ball, h.astype(np.float32),   # noqa: E731
+                               a.astype(np.float32), np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+    X, names = features.compute(mk(base[0] + shift, base[1] + shift))
+    assert np.nanmean(X[50:350, names.index("n_coh")]) > 0.9
+    ang = rng.uniform(0, 2 * np.pi, (2, K))
+    drift = np.stack([np.cos(ang), np.sin(ang)], -1) * (2.0 / 25)         # 2 m/s, random headings
+    X, names = features.compute(mk(base[0] + t * drift[0], base[1] + t * drift[1]))
+    assert np.nanmean(X[50:350, names.index("n_coh")]) < 0.4
 
 
 def test_feature_versions(seq):

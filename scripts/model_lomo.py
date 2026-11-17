@@ -35,7 +35,9 @@ EXT = Path.home() / "mtah-external"
 CV = SPLITS["train"] + SPLITS["dev"]
 HOLDOUT = SPLITS["holdout"]
 METRICA = ["METRICA1", "METRICA2", "METRICA3"]   # second development set: predicted, never trained on
-ALL_DRAWS = "nominal:0,nominal:1,stoppage:0,stoppage:1,harsh:0,harsh:1"
+REGRESS_FROM = "lgb_v1"          # every artefact stores its predictions on the same fixed sequence
+ALL_DRAWS = ("nominal:0,nominal:1,stoppage:0,stoppage:1,nominal_lj:0,nominal_lj:1,"
+             "stoppage_lj:0,stoppage_lj:1,harsh:0,harsh:1")
 
 
 def parse_draws(s):
@@ -105,7 +107,9 @@ def git_commit():
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--name", required=True)
-    ap.add_argument("--config", default=str(model.DEFAULT_CFG))
+    ap.add_argument("--config", default=str(model.DEFAULT_CFG),
+                    help="model config JSON, or an artefact's meta.json (its cfg, feature version "
+                         "and exact feature list are reused: an exact re-fit of that model)")
     ap.add_argument("--train-draws", default=ALL_DRAWS)
     ap.add_argument("--export-draws", default=ALL_DRAWS)
     ap.add_argument("--no-final", action="store_true", help="skip the all-5 model and holdout files")
@@ -119,6 +123,10 @@ def main(argv=None):
                          "'drop_features=[\"ctrl\"]'")
     args = ap.parse_args(argv)
     cfg = model.load_cfg(args.config)
+    if "names" in cfg and "cfg" in cfg:          # an artefact's meta.json
+        meta = cfg
+        cfg = dict(meta["cfg"], feature_names=meta["names"],
+                   feature_version=int(meta.get("feature_version", model.LEGACY_FEATURE_VERSION)))
     for kv in args.set:
         key, val = kv.split("=", 1)
         node = cfg
@@ -183,6 +191,7 @@ def main(argv=None):
                                [rows[m][1] for m in pool if m != match],
                                names, cfg, valid=rows[match], log=curve)
         curves[match] = curve
+        model.save(art, ROOT / "outputs" / "folds" / args.name / match)   # kept on disk, not in git
         oof[match] = predict_match(art, match, "oof")
         best = {h: (int(np.argmin(c)) + 1, float(np.min(c)), float(c[-1])) for h, c in curve.items()}
         log(f"fold {match}: rows {art['n_rows']} | held-out sampled-row logloss (best round, best, last): {best}")
@@ -227,6 +236,7 @@ def main(argv=None):
         for match in extra:
             art = model.fit_arrays([rows[m][0] for m in pool if m != match],
                                    [rows[m][1] for m in pool if m != match], names, cfg)
+            model.save(art, ROOT / "outputs" / "folds" / args.name / match)
             res[match] = predict_match(art, match, "metrica",
                                        [d for d in export_draws if there(match, *d)])
             log(f"fold {match} (extra): rows {art['n_rows']}")
@@ -248,7 +258,7 @@ def main(argv=None):
         art = model.fit_arrays([rows[m][0] for m in pool], [rows[m][1] for m in pool], names, cfg)
         art["info"] = {"trained_on": pool, "train_draws": args.train_draws, "tau_s": tau_s,
                        "commit": report["commit"]}
-        model.save(art, mdir)
+        model.save(art, mdir, regress_seq=model.regression_input(ROOT / "models" / REGRESS_FROM))
         for match in HOLDOUT:
             predict_match(art, match, "holdout")
         log(f"final model saved to {mdir} ({sum(f.stat().st_size for f in mdir.glob('*.txt')) / 1e6:.1f} MB); "
