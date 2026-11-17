@@ -1,0 +1,14 @@
+{
+  "_doc": "Candidate v4: lgb_v4 frame model (feature version 4: canonicalised inputs, i.e. short ball gaps interpolated, ball and player tracks low-pass filtered, kinematics over 0.3 s; alive/dead head without touch timing) + frozen decoder configs/decoder.json, kickoff rule on.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {
+    "module": "mtah.model",
+    "artefact": "models/lgb_v4"
+  },
+  "decoder": {
+    "module": "mtah.decode",
+    "cfg_path": "configs/decoder.json"
+  }
+}
