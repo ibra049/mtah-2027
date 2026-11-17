@@ -114,7 +114,8 @@ def breakdown(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_lj")
               + "  ".join(f"{k} {a / max(b, 1):.2f} (n={b})" for k, (a, b) in tr.items()), flush=True)
 
 
-def profile_table(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_lj", "gapstress", "harsh")):
+def profile_table(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_lj", "nominal_sm", "stoppage_sm",
+                                "gapstress", "harsh")):
     """Per degradation profile, pooled over matches and seeds: family score (mean over the label
     views of the mean official spellF1 over matches), predicted against true dead share, and the
     number of predicted dead runs that contain no true dead frame (over-calling stoppages)."""
@@ -133,7 +134,11 @@ def profile_table(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_
         mids = sorted({f.stem.split("_")[0] for folder in _seed_folders(dst, profile) for f in folder.glob("*.npy")})
         for mid in mids:
             if mid not in raw:
-                raw[mid] = [Sequence.load(cache_path(mid, per)).y for per in (1, 2)]
+                if mid.startswith("METRICA"):          # provider-semantics labels of the sample games
+                    from mtah import io_metrica
+                    raw[mid] = [q.y for q in io_metrica.load(int(mid[-1]))]
+                else:
+                    raw[mid] = [Sequence.load(cache_path(mid, per)).y for per in (1, 2)]
             per_seed = []
             for folder in sorted(_seed_folders(dst, profile)):
                 files = [folder / f"{mid}_{per}.npy" for per in (1, 2)]
@@ -147,11 +152,13 @@ def profile_table(dst, profiles=("nominal", "stoppage", "nominal_lj", "stoppage_
                     pd_ = np.r_[False, pr == D, False].astype(np.int8)
                     st, en = np.flatnonzero(np.diff(pd_) == 1), np.flatnonzero(np.diff(pd_) == -1)
                     runs += len(st)
-                    false += sum(1 for a, b in zip(st, en) if not (y[a:b] == D).any())
+                    false += sum(1 for a, b in zip(st, en) if not ((y[a:b] == D) | (y[a:b] < 0)).any())
                     td = np.r_[False, y == D, False].astype(np.int8)
                     true_runs += int((np.diff(td) == 1).sum())
                 yy, pp = np.concatenate(raw[mid]), np.concatenate(preds)
-                per_seed.append((f1, float((pp == D).mean()), float((yy == D).mean()), runs, true_runs, false))
+                known = yy >= 0                        # Metrica halves have unlabelled edges
+                per_seed.append((f1, float((pp[known] == D).mean()), float((yy[known] == D).mean()),
+                                 runs, true_runs, false))
             if per_seed:
                 a = np.mean(per_seed, axis=0)
                 fam.append(a[0]); dp.append(a[1]); dt.append(a[2]); nr.append(a[3]); ntr.append(a[4]); nf.append(a[5])
@@ -168,6 +175,8 @@ def main(argv=None):
     ap.add_argument("--compare")
     ap.add_argument("--decoder-cfg")
     ap.add_argument("--aux", action="store_true", help="pass the aux hint to the decoder")
+    ap.add_argument("--sub", default="oof", choices=["oof", "metrica"],
+                    help="which prediction folder to score: the DFL out-of-fold files or the Metrica games")
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
                     help="decoder config overrides, e.g. switch_cost=15000")
     args = ap.parse_args(argv)
@@ -179,15 +188,18 @@ def main(argv=None):
     print(f"decoder: {Path(dec.__file__).resolve()} cfg overrides: {cfg or 'DEFAULTS'}", flush=True)
     roots = []
     for name in [args.name] + ([args.compare] if args.compare else []):
-        dst, n = decode_all(name, "oof", cfg, dec, args.aux)
+        dst, n = decode_all(name, args.sub, cfg, dec, args.aux)
         print(f"decoded {n} halves of {name} -> {dst}", flush=True)
         roots.append(dst)
-    for dst in roots:
-        breakdown(dst)
+    if args.sub == "oof":
+        for dst in roots:
+            breakdown(dst)
     tables = [profile_table(dst) for dst in roots]
     if len(tables) == 2:
         print("\ngain by profile (family, first minus second): "
               + "  ".join(f"{k} {tables[0][k] - tables[1][k]:+.4f}" for k in tables[0] if k in tables[1]))
+    if args.sub != "oof":
+        return 0
     cmd = [sys.executable, str(ROOT / "scripts" / "eval_external.py"), "--pred-root", str(roots[0])]
     if args.compare:
         cmd += ["--compare", str(roots[1])]

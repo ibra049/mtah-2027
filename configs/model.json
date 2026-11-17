@@ -3,9 +3,10 @@
   "seed": 20271117,
   "_feature_version": "Feature-set version of mtah.features the model is trained and run with (recorded in the artefact). 4 = canonical inputs: short ball gaps interpolated, ball and player tracks low-pass filtered, kinematics over 0.3 s baselines, touch thresholds from the half's own quantiles.",
   "feature_version": 4,
-  "_drop_features": "Regexes of feature names no head uses. @raw_kinematics = features.RAW_KINEMATICS: player speeds, block velocity and ball velocity changes in absolute m/s; their twins in units of each half's own scale (speeds clipped from below at 1 m/s) stay.",
+  "_drop_features": "Regexes of feature names no head uses. @raw_kinematics = features.RAW_KINEMATICS: player speeds, block velocity and ball velocity changes in absolute m/s; their twins in units of each half's own scale (speeds clipped from below at 1 m/s) stay. The per-half ball-gap descriptors (n_reg_gap*, n_reg_miss) are dropped from every head: they are constants of a half, constants in two of the five training profiles, and outside the training range on the target (label-free drift report); the model reads gap length from the per-frame gap features, which are local.",
   "drop_features": [
-    "@raw_kinematics"
+    "@raw_kinematics",
+    "^n_reg_(gap\\d+|miss)$"
   ],
   "_head_drop": "Features a single head may not split on. The alive/dead head stays simple: no touch or kick timing, no control clocks, no nearest-team dwell, no regime descriptors. Those earn their gain on team identity; on the target a 'long time since the last touch' with the ball in view made an earlier model cut live play (label-free check).",
   "head_drop": {
@@ -18,10 +19,10 @@
       "^n_reg_"
     ]
   },
-  "_stride": "Uniform rows: every stride-th frame per sequence from a random phase (25 fps frames are near-duplicates; nine noise draws per match, each at its own phase, add more than denser sampling, and a fold stays within the 8 GB machine).",
-  "stride": 28,
+  "_stride": "Uniform rows: every stride-th frame per sequence from a random phase (25 fps frames are near-duplicates; eleven noise draws per match, each at its own phase, add more than denser sampling, and a fold stays within the 8 GB machine).",
+  "stride": 36,
   "_stride_near": "Dense rows: every stride_near-th frame within near_radius frames of a direct team change or inside a possession shorter than short_poss frames. spellF1 scores possessions, and v1's errors sat there (team accuracy 0.55 within 6 frames of a change, 0.70 within 1 s, 0.98 beyond 3 s). The team head keeps this emphasis; the dead and change heads are weighted back to the frame distribution.",
-  "stride_near": 7,
+  "stride_near": 9,
   "near_radius": 25,
   "short_poss": 50,
   "emphasis_heads": [

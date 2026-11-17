@@ -140,6 +140,11 @@ the 5 out-of-fold matches, seeds 0 and 1 (`scripts/model_decode_eval.py`). Basel
 | lgb_v1 | 223 (v2 set) | nominal, harsh | 0.6469 | - | 0.6161 | decoder switch 3000 |
 | lgb_v2 | 303: + control events, touch events (absolute threshold), regime descriptors; dense rows near team changes | + stoppage | 0.6730 | 0.6842 | 0.6270 | +0.0317 paired vs v1, 5/5 matches |
 | lgb_v3 | 353: noise-relative touch streams, off-pitch filter (v3 set) | same | 0.6727 | 0.6879 | 0.6378 | ties v2 externally (+0.0006); built for transfer |
+| lgb_v4 | 391: canonical inputs (v4 set), raw m/s kinematics dropped, simple alive/dead head | nominal, stoppage, nominal_lj, stoppage_lj, harsh | 0.6701 | 0.6911 | 0.6337 | ties v2 externally (select 0.6806 vs 0.6797); low-jitter profiles 0.6867 / 0.6999 |
+
+v2, v3 and v4 rows use the decoder re-tuned on v2 (switch cost 4500). On every profile lgb_v4's
+predicted dead-ball share is 0.458-0.465 against a true 0.463, and it emits 1.1-2.4 dead runs per
+match that contain no true dead frame (lgb_v2: 2.0-4.7).
 
 Where possessions are lost (label view 0.5 s, nominal): recall at IoU 0.5 by true possession
 length, v1 -> v2: under 1 s 0.05 -> 0.08, 1-2 s 0.24 -> 0.30, 2-5 s 0.54 -> 0.59, 5-15 s

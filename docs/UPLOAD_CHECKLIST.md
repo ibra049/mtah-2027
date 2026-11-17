@@ -9,7 +9,7 @@ The submission file is `~/mtah-data/out/Montreal.csv`, written by
 
 <!-- the captain updates this line at each promotion, together with configs/final.json and README -->
 ```
-EXPECTED_SHA256  a97c88ec23a6cd92ea86133e80e56b87dbeeafd4efed9e28804386e3afb918ab   (configs/final.json = v1q)
+EXPECTED_SHA256  ddd68c49e02c012d01f10896c24dc1fa55005fe0c898194e065b5af4decc3bed   (configs/final.json = v4p)
 ```
 
 Print the hash of the file you are about to upload and compare it with the line above:

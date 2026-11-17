@@ -1,11 +1,11 @@
 {
-  "_doc": "THE submission config (README: single regeneration command). Candidate v1q: lgb_v1 frame model + temporal stacker on the frame model's probabilities only (models/stack_lgb_v1q; no onset channel, no ball cues) + frozen decoder (configs/decoder.json), kickoff rule on. Previous upload candidate: configs/v1.json (sha256 31839e5696ba1f6f1349abd711ba0176aa7a61be4fb8ed13f9dc32725ae1f4a1); fallback: configs/fallback_baseline.json. The captain updates this file and the EXPECTED_SHA256 lines in README.md and docs/UPLOAD_CHECKLIST.md in the same commit.",
+  "_doc": "THE submission config (README: single regeneration command). Candidate v4p: lgb_v4 frame model (feature version 4, canonicalised inputs) + temporal stacker on the frame model's probabilities and onset channel (models/stack_lgb_v4p) + frozen decoder (configs/decoder.json), kickoff rule on. Earlier upload candidates stay reproducible: configs/v1q.json (sha256 a97c88ec23a6cd92ea86133e80e56b87dbeeafd4efed9e28804386e3afb918ab), configs/v1.json, configs/fallback_baseline.json. The captain updates this file and the EXPECTED_SHA256 lines in README.md and docs/UPLOAD_CHECKLIST.md in the same commit.",
   "method": "pipeline",
   "kickoff_rule": true,
   "use_aux": true,
   "model": {
     "module": "mtah.model_stacked",
-    "artefact": "models/stack_lgb_v1q"
+    "artefact": "models/stack_lgb_v4p"
   },
   "decoder": {
     "module": "mtah.decode",

@@ -352,7 +352,7 @@ def _team_block(P, bi, vb, dirn, L, W, version=FEATURE_VERSION):
     spf = np.maximum(sp, SPEED_FLOOR)                     # NaN stays NaN
     vsum = np.where(ms[..., None], V, 0).sum(1)           # [T,2] summed velocity (pitch frame)
     aux = dict(sp=sp, sp_sum=sp_sum, ns=ns, slow_cnt=slow_cnt, spf=spf,
-               spf_sum=np.where(ms, spf, 0).sum(1), vsum=vsum)
+               spf_sum=np.where(ms, spf, 0).sum(1), spf_sq=np.where(ms, spf * spf, 0).sum(1), vsum=vsum)
     return f, aux
 
 
@@ -732,6 +732,12 @@ def _compute(seq, version=FEATURE_VERSION):
         # threshold-free possession cues
         c["d_turn"] = closer * c["n_jump_rel"]            # who is nearest while the ball turns
         _hold_features(c, dh_seen, da_seen, obs, t, T)
+        # ball-free stoppage cues (a stoppage against play with a hidden ball): players crowding
+        # one box for a set piece, and how unequal the players' speeds are (open play mixes
+        # sprints and jogs; a stoppage is uniformly slow)
+        c["n_box_max"] = np.maximum(fh["own_box"] + fa["opp_box"], fh["opp_box"] + fa["own_box"])
+        m2 = (auxh["spf_sq"] + auxa["spf_sq"]) / nsn
+        c["n_sp_std_rel"] = np.sqrt(np.maximum(m2 - spf_mean * spf_mean, 0.0)) / spscale
     else:
         kin = ball_jump(ball, obs)
         jscale = max(noise_scale(kin[1], kin[2]), 0.1)
@@ -777,13 +783,16 @@ def _compute(seq, version=FEATURE_VERSION):
             "h_d1", "a_d1", "n_sp_mean_rel", "n_slow_rel", "d_sp_mean_rel", "d_blockv_rel",
             "n_coh", "n_sp_q90_rel"]
     if v4:
-        base += ["d_turn", "n_jump_rel", "d_hold"]
+        base += ["d_turn", "n_jump_rel", "d_hold", "n_box_max", "n_sp_std_rel"]
     for name in base:
         x = np.asarray(c[name], np.float64)
         for wlen in WINDOWS:
             c[f"{name}_p{wlen}"] = _win_mean(x, -wlen, -1)
             c[f"{name}_f{wlen}"] = _win_mean(x, 1, wlen)
-    for name in ("n_sp_mean_rel", "n_slow_rel", "n_coh", "n_sp_q90_rel"):      # 15 s context
+    long_names = ["n_sp_mean_rel", "n_slow_rel", "n_coh", "n_sp_q90_rel"]
+    if v4:
+        long_names += ["n_box_max", "n_sp_std_rel"]
+    for name in long_names:                                                    # 15 s context
         x = np.asarray(c[name], np.float64)
         c[f"{name}_p{LONG_WINDOW}"] = _win_mean(x, -LONG_WINDOW, -1)
         c[f"{name}_f{LONG_WINDOW}"] = _win_mean(x, 1, LONG_WINDOW)
