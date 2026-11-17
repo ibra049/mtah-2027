@@ -115,11 +115,20 @@ def report_lines(target_stats, ref):
     return lines
 
 
+METRICA = ["METRICA1", "METRICA2", "METRICA3"]
+
+
 def _external_seqs(profile):
+    """Reference halves of a profile: the 5 OOF DFL matches by default; a name ending in
+    '_metrica' (e.g. stoppage_sm_metrica) uses that profile's 3 Metrica games instead."""
     from .canonical import Sequence
     deg = Path.home() / "mtah-external" / "cache_deg"
-    return (Sequence.load(deg / profile / str(sd) / f"{m}_{p}.npz")
-            for m in OOF5 for sd in (0, 1) for p in (1, 2))
+    if profile.endswith("_metrica"):
+        base, matches = profile[:-len("_metrica")], METRICA
+    else:
+        base, matches = profile, OOF5
+    return (Sequence.load(deg / base / str(sd) / f"{m}_{p}.npz")
+            for m in matches for sd in (0, 1) for p in (1, 2))
 
 
 def build_reference(names=None, meta=MODEL_META, ref=REF, profiles=PROFILES):

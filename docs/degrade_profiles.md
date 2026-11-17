@@ -54,3 +54,61 @@ Seed 0, all 14 DFL halves; median [min–max] over halves (`scripts/profile_tabl
 - **Model robustness:** on the Metrica games, v2 and v3 lose their lead and over-call dead ball
   under the filter, while v1 and v4 do not (`scripts/sm_eval.py`). That makes the _sm profiles the
   external veto for new models.
+
+## Model robustness on the smoothed profiles (Metrica games, 2026-11-17)
+Setup:
+- **Data:** the 3 Metrica games, both halves, seeds 0 and 1 (12 half-draws per profile). Labels are
+  the provider's event chain.
+- **Decoding:** every candidate is decoded with the shipped frozen decoder (`configs/decoder.json`).
+  The kickoff rule needs target tags and is not applied.
+- **Scripts:** `scripts/sm_eval.py` runs the configs through `mtah.predict.Components`;
+  `scripts/sm_eval_preds.py` reads saved probabilities. v1 and v4 agree exactly between the two.
+- **v4m / v4mp** use model-45's leave-one-game-out Metrica predictions. The all-match artefact has
+  seen these games.
+
+Metrics:
+- **family:** mean spellF1 over the views min_control(0 / 0.5 / 1 s).
+- **predD / trueD:** dead-ball share, predicted and true.
+- **spur:** predicted dead runs that touch no true dead frame.
+- **cut:** true possessions such a run overlaps.
+
+| profile | model | family | predD / trueD | spur | cut |
+|---|---|---|---|---|---|
+| stoppage_lj (no filter) | v1 | .7122 | .362 / .364 | 69 | 47 |
+| | v2 | .7670 | .382 | 74 | 59 |
+| | v3 | .7721 | .388 | 73 | 62 |
+| | v4 | .7662 | .367 | 46 | 37 |
+| stoppage_sm (all draws) | v1 | .6957 | .363 / .364 | 75 | 53 |
+| | v2 | .7018 | .393 | 104 | 91 |
+| | v3 | .7089 | .402 | 139 | 129 |
+| | v4 | .7301 | .366 | 56 | 41 |
+| | v4p | .7634 | .367 | 46 | 38 |
+| | v4m (LOGO) | .7653 | .371 | 50 | 34 |
+| | v4mp (LOGO) | .7839 | .373 | 40 | 27 |
+| stoppage_sm, σ ≥ 3 frames (10) | v1 | .6945 | .378 / .377 | 64 | 46 |
+| | v2 | .7004 | .409 | 90 | 78 |
+| | v3 | .7047 | .419 | 126 | 116 |
+| | v4 | .7282 | .381 | 47 | 35 |
+| | v4p | .7616 | .382 | 36 | 30 |
+| | v4mp | .7847 | .388 | 33 | 22 |
+| nominal_sm (all draws) | v1 | .6557 | .369 / .364 | 90 | 76 |
+| | v2 | .6527 | .426 | 183 | 180 |
+| | v3 | .6746 | .419 | 148 | 149 |
+| | v4 | .6886 | .376 | 68 | 60 |
+| | v4p | .7151 | .377 | 48 | 45 |
+| | v4mp | .7326 | .381 | 42 | 30 |
+| nominal_sm, σ ≥ 3 frames (3) | v1 | .6628 | .375 / .369 | 23 | 22 |
+| | v2 | .6257 | .439 | 50 | 51 |
+| | v3 | .6426 | .434 | 43 | 47 |
+| | v4 | .6743 | .382 | 22 | 21 |
+| | v4p | .6970 | .379 | 17 | 18 |
+| | v4mp | .7131 | .381 | 15 | 11 |
+
+Reading:
+- **v2 and v3 fail under the filter.** Without it they beat v1 by about +.055 / +.060 family. With
+  it the lead shrinks to +.006 / +.013 (stoppage_sm), and they fall below v1 on nominal_sm at
+  σ ≥ 3. They over-call dead ball (+.03 to +.07 dead share) and produce 1.4–2× v1's spurious dead
+  runs. This matches their target readouts.
+- **v4 and its stacked successors keep their lead under the filter.** Their dead share stays
+  within .003–.017 of truth, and they produce fewer spurious dead runs than v1.
+- **Use as a veto:** a new model must not lose its lead or over-call dead ball on these profiles.
