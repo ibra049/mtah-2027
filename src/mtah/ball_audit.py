@@ -64,7 +64,11 @@ def _autocorr(v, k):
     return float(np.corrcoef(a[ok], b[ok])[0, 1])
 
 
-def audit(seq) -> dict:
+def audit(seq, canon=None) -> dict:
+    """canon: optional callable Sequence -> Sequence (e.g. features.canonicalize, feature
+    version 4) applied before every statistic, touches included."""
+    if canon is not None:
+        seq = canon(seq)
     T = len(seq)
     minutes = T / FPS / 60.0
     s3 = features._in_play(seq)
@@ -174,19 +178,24 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", action="store_true")
     ap.add_argument("--external", action="store_true")
+    ap.add_argument("--canon", default=None,
+                    help="name of a canonicalisation callable in mtah.features, applied first")
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     a = ap.parse_args(argv)
+    from mtah.player_audit import resolve_canon
+    canon = resolve_canon(a.canon)
+    tag = f"+{a.canon}" if a.canon else ""
     if a.target:
         from mtah import io_target
         for seq in io_target.load(a.data_dir, io_target.load_config(), dtype=np.float32,
                                   with_tags=False):
-            emit("target", seq.period, audit(seq), prefix="SAFE| ")
+            emit("target" + tag, seq.period, audit(seq, canon), prefix="SAFE| ")
     if a.external:
         for src, half, path in external_sources():
             if not os.path.isfile(path):
-                print(f"src={src} half={half} missing=1")
+                print(f"src={src}{tag} half={half} missing=1")
                 continue
-            emit(src, half, audit(Sequence.load(path)))
+            emit(src + tag, half, audit(Sequence.load(path), canon))
     return 0
 
 
