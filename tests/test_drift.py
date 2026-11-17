@@ -42,3 +42,11 @@ def test_four_profiles_fit_the_safe_line_budget():
     lines = drift.report_lines(_ref(rng, names), ref)
     pat = re.compile(r"^SAFE\| [A-Za-z0-9_.=:/+, -]{0,240}$")
     assert len(lines) == 4 * 16 + 1 <= 80 and all(pat.match("SAFE| " + l) for l in lines)
+
+
+def test_five_profiles_stay_within_80_lines():
+    rng = np.random.default_rng(3)
+    names = [f"n_feature_{i:03d}" for i in range(300)]
+    ref = {"profiles": {p: _ref(rng, names) for p in ("nominal", "stoppage", "nominal_lj", "stoppage_lj", "stoppage_sm")}}
+    lines = drift.report_lines(_ref(rng, names), ref)
+    assert len(lines) == 5 * 15 + 1 <= 80
