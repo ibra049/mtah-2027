@@ -6,7 +6,7 @@ Artefact directory:
     stack.txt       LightGBM booster of mtah.stack (fitted on all non-holdout out-of-fold files)
     features.txt    feature names in column order (checked on every call)
     meta.json       {"base_module": "mtah.model", "base_artefact": "models/lgb_v2",
-                     "onset_key": "turn_onset", "use_cues": true|false,
+                     "onset_key": "turn_onset", "use_cues": true|false, "use_onset": true|false,
                      ...provenance and hashes...}
 
 predict_both(artefact, seq) runs the frame model once, builds the stacker features from its
@@ -69,7 +69,8 @@ def load(path) -> dict:
 def refine(art, proba, aux, seq) -> np.ndarray:
     """Stacker on top of given frame-model outputs (used directly on stored predictions)."""
     onset = (aux or {}).get(art["meta"].get("onset_key", "turn_onset"))
-    X, names, _ = stack.features(proba, onset, seq, use_cues=art["meta"].get("use_cues", True))
+    X, names, _ = stack.features(proba, onset, seq, use_cues=art["meta"].get("use_cues", True),
+                                 use_onset=art["meta"].get("use_onset", True))
     if names != art["names"]:
         raise ValueError("stacker features differ from the ones the artefact was fitted on")
     return stack.predict_proba(art["booster"], X)
