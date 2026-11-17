@@ -90,11 +90,20 @@ def main(argv=None):
     ap.add_argument("--name", required=True)
     ap.add_argument("--profiles", nargs="+", default=["nominal_sm", "stoppage_sm"])
     ap.add_argument("--tau", type=float, default=0.5)
+    ap.add_argument("--sub", default="oof", choices=["oof", "metrica"],
+                    help="DFL out-of-fold matches, or the Metrica sample games (provider labels)")
     args = ap.parse_args(argv)
     tau = int(round(args.tau * FPS))
     short = int(SHORT_S * FPS)
-    dst = ROOT / "outputs" / "decoded" / args.name
-    labels = {m: [min_control(Sequence.load(cache_path(m, per)).y, tau) for per in (1, 2)] for m in CV}
+    if args.sub == "metrica":
+        from mtah import io_metrica
+        matches = ["METRICA1", "METRICA2", "METRICA3"]
+        dst = ROOT / "outputs" / "decoded" / (args.name + "_metrica")
+        labels = {m: [min_control(q.y, tau) for q in io_metrica.load(int(m[-1]))] for m in matches}
+    else:
+        matches = CV
+        dst = ROOT / "outputs" / "decoded" / args.name
+        labels = {m: [min_control(Sequence.load(cache_path(m, per)).y, tau) for per in (1, 2)] for m in CV}
     out = {}
     for profile in args.profiles:
         fate = np.zeros((len(BINS), len(FATES)))
@@ -103,7 +112,7 @@ def main(argv=None):
         n_pred = n_true = extra_short = 0
         folders = [d for d in sorted(dst.iterdir()) if d.name.rsplit("_", 1)[0] == profile]
         for folder in folders:
-            for m in CV:
+            for m in matches:
                 ys = labels[m]
                 ps = [np.load(folder / f"{m}_{per}.npy") for per in (1, 2)]
                 # 1. fate of the true possessions (official matching on the joined match)
@@ -130,7 +139,7 @@ def main(argv=None):
                     return report(ys, preds)["spell_f1_mean"]
                 is_short = lambda s, e, lab, seg: e - s < short                              # noqa: E731
                 is_long_wrong = lambda s, e, lab, seg: e - s >= short and wrong_team(lab, seg)   # noqa: E731
-                d1 = [fill_alive(p, y != D) for p, y in zip(ps, ys)]
+                d1 = [fill_alive(p, (y == H) | (y == A)) for p, y in zip(ps, ys)]
                 f1["pred"].append(score(ps))
                 f1["dead"].append(score(d1))
                 f1["short"].append(score([paint(p, y, is_short) for p, y in zip(ps, ys)]))
@@ -141,7 +150,7 @@ def main(argv=None):
                 f1["ladder dead+short"].append(score(d2))
                 f1["ladder dead+short+long team"].append(score(d3))
         tot = fate.sum(1)
-        print(f"\n== {args.name} {profile}: {len(folders)} seeds x {len(CV)} matches, label view {args.tau:g} s; "
+        print(f"\n== {args.name} {args.sub} {profile}: {len(folders)} seeds x {len(matches)} matches, label view {args.tau:g} s; "
               f"true possessions {int(n_true)}, predicted {int(n_pred)}")
         print(f"fate of true possessions at IoU 0.5 (share of the length class){'':>3}" + "".join(f"{f:>10}" for f in FATES) + f"{'n':>8}")
         for i, name in enumerate(BINS):
@@ -163,7 +172,7 @@ def main(argv=None):
                                                    for s, a, b in zip(steps, lad[:-1], lad[1:]))
               + f"   left (timing, fragmentation): {1 - lad[-1]:.4f} ({100 * (1 - lad[-1]) / gap:.0f}%)")
         out[profile] = {"fate": fate.tolist(), "f1": mean}
-    (ROOT / "outputs" / f"loss_causes_{args.name}.json").write_text(json.dumps(out, indent=1) + "\n")
+    (ROOT / "outputs" / f"loss_causes_{args.name}_{args.sub}.json").write_text(json.dumps(out, indent=1) + "\n")
     return 0
 
 
