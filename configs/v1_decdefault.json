@@ -1,0 +1,8 @@
+{
+  "_doc": "PATH TEST ONLY (not a candidate): v1 with the decoder's built-in DEFAULTS (cfg {}), used until decoder-7d freezes configs/decoder.json.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {"module": "mtah.model", "artefact": "models/lgb_v1"},
+  "decoder": {"module": "mtah.decode", "cfg": {}}
+}
