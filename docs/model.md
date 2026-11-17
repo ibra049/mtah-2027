@@ -162,3 +162,38 @@ Frame level, out-of-fold, nominal seed 0 (all frames | ball seen | ball missing)
 - lgb_v1: log-loss 0.1710; alive/dead accuracy 0.9847; team accuracy 0.8952 | 0.9084 | 0.8727
 - lgb_v2: log-loss 0.1597; alive/dead accuracy 0.9860; team accuracy 0.9042 | 0.9190 | 0.8791
 - lgb_v3: log-loss 0.1571; alive/dead accuracy 0.9868; team accuracy 0.9043 | 0.9205 | 0.8766
+
+## Where the method fails (limitations)
+`scripts/model_loss_causes.py`, lgb_v4 with the reference decoder, DFL out-of-fold, the two
+smoothed profiles (closest to the target), label view 0.5 s, 4268 true possessions per profile.
+
+Fate of a true possession at IoU 0.5, by its length (nominal_sm / stoppage_sm):
+
+| length | share of possessions | matched | absorbed by the other team | right team, wrong extent | called dead |
+|---|---|---|---|---|---|
+| under 1 s | 9% | 0.09 / 0.09 | 0.65 / 0.63 | 0.18 / 0.20 | 0.08 / 0.09 |
+| 1-2 s | 18% | 0.28 / 0.37 | 0.39 / 0.36 | 0.29 / 0.24 | 0.04 / 0.03 |
+| 2-5 s | 32% | 0.53 / 0.57 | 0.21 / 0.19 | 0.25 / 0.22 | 0.01 / 0.02 |
+| 5-15 s | 28% | 0.82 / 0.84 | 0.04 / 0.04 | 0.13 / 0.12 | 0.00 |
+| over 15 s | 12% | 0.94 / 0.96 | 0.00 | 0.06 / 0.04 | 0.00 |
+
+Half of all missed possessions are shorter than 2 s and another third last 2-5 s. Half are
+missed because the frames go to the other team (the possession is absorbed by its neighbour),
+45% have the right team but no one-to-one match (a missed neighbour merged them into a longer
+spell, or they were split), 5% are called dead ball.
+
+Oracle repairs of the prediction, official spellF1 (0.644 / 0.678 before any repair), as shares
+of the gap to a perfect score:
+
+| repair (cumulative) | spellF1 after | share of the gap |
+|---|---|---|
+| true alive/dead mask | 0.668 / 0.698 | 7% / 6% |
+| + frames of true possessions under 2 s | 0.830 / 0.845 | 45% / 46% |
+| + longer possessions given to the wrong team | 0.934 / 0.941 | 29% / 30% |
+| left: boundary timing and fragmentation | | 19% / 18% |
+
+So the alive/dead decision is nearly solved on external data; three quarters of what is lost is
+team identity, and most of that sits in possessions shorter than 2 s. Those are single touches
+and clearances, where the ball is most often lost by the tracker at the touch itself (the touch
+detector finds under half of the event-truth touches on degraded data), and missing one short
+possession also costs its two neighbours, which are merged into one spell.
