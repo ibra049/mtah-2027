@@ -1,0 +1,8 @@
+{
+  "_doc": "Hybrid candidate: P(dead) from lgb_v1, H/A split of the alive mass from lgb_v2 (mtah.model_hybrid.combine), turn_onset aux from lgb_v2; frozen decoder configs/decoder.json; kickoff rule on. Not run on the target until the captain says decoder-7d's external test passed.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {"module": "mtah.model_hybrid", "cfg": {"dead": "models/lgb_v1", "team": "models/lgb_v2"}},
+  "decoder": {"module": "mtah.decode", "cfg_path": "configs/decoder.json"}
+}
