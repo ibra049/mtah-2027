@@ -52,6 +52,10 @@ PYTHONPATH=src .venv/bin/python -m mtah.check_target <bundle>   # parse assertio
 PYTHONPATH=src .venv/bin/python -m mtah.baseline --data-dir <bundle> --check-official
 ```
 
+`scripts/release_check.py --config <cfg>` runs the whole release verification in one go. It
+predicts, validates, reruns for an identical SHA-256, runs `check_candidate`, and regenerates
+from a clean clone, then prints a one-line summary.
+
 `--check-official` rebuilds the organisers' four published baseline files and compares them
 byte for byte. It needs the official repository checked out at `vendor/challenge/`. The checks
 print only aggregate status lines.
