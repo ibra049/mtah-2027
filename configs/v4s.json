@@ -1,0 +1,8 @@
+{
+  "_doc": "Candidate v4s (readout only): lgb_v4s frame model (feature version 4 + smoothed and low-jitter draws in training, per-half gap descriptors dropped) + frozen decoder configs/decoder.json, kickoff rule on. No stacker yet.",
+  "method": "pipeline",
+  "kickoff_rule": true,
+  "use_aux": true,
+  "model": {"module": "mtah.model", "artefact": "models/lgb_v4s"},
+  "decoder": {"module": "mtah.decode", "cfg_path": "configs/decoder.json"}
+}

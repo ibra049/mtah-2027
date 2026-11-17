@@ -374,3 +374,11 @@ def test_stack_shift_standardisation():
     zs, diffs = shifts(tgt, ref, [5, 25, 50, 75, 95])
     assert zs["d"] == [0.0, 0.25, 0.5, 0.0, 0.0]
     assert abs(diffs["share_pD_gt_0.5"] - 0.1) < 1e-12
+
+
+def test_onset_stats():
+    from mtah.stack_shift import onset_stats
+    o = np.zeros(1500)
+    o[[100, 400, 900]] = [0.5, 0.2, 0.9]       # two peaks above 0.3
+    s = onset_stats([o])
+    assert s["peaks_pm"] == 2.0 and s["q99"] >= 0 and s["q95"] == 0
