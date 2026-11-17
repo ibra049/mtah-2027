@@ -311,3 +311,14 @@ def test_tag_agreement_ball_split():
     assert out["attacking"] == (5, 0.6)
     assert out["attacking|ball"] == (3, 2 / 3)      # frames 0,2,5 -> H,A,H
     assert out["attacking|noball"] == (2, 0.5)      # frames 1,3 -> H,A
+
+
+def test_half_stats():
+    from mtah.check_candidate import half_stats
+    # 1 s H, 0.5 s D, 3 s A, 2 s D, 0.4 s H  (25 fps)
+    codes = np.array([0] * 25 + [2] * 12 + [1] * 75 + [2] * 50 + [0] * 10, dtype=np.int8)
+    s = half_stats(codes, 0, len(codes))
+    assert s["n_possessions"] == 3 and s["n_dead"] == 2
+    assert s["share_lt1s"] == "0.3333" and s["share_lt2s"] == "0.6667" and s["share_lt4s"] == "1.0000"
+    assert s["median_dead_s"] == f"{np.median([0.48, 2.0]):.2f}"
+    assert s["dead_share"] == f"{62 / 172:.4f}"
