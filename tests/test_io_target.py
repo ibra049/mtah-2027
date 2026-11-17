@@ -20,7 +20,7 @@ L, W = 105.3, 68.0
 
 def small_cfg(T, split, blocks=None):
     cfg = io_target.load_config()
-    cfg.update(n_frames=T, period_split_frame=split,
+    cfg.update(n_frames=T,
                graded_blocks=blocks or [[2, split - 2], [split, T - 3]])
     return cfg
 
@@ -47,15 +47,16 @@ def test_edge_cases(tmp_path):
     (tmp_path / "BAR-ATH_tactical_atd.xml").write_text(meta_xml(4, sides, 1, 7))
     (tmp_path / "BAR-ATH_tactical_atd.txt").write_text("\r\n".join(lines) + "\r\n\n")
     cfg = small_cfg(7, 3)
-    seqs, info = io_target.load(str(tmp_path), cfg, dtype=np.float64, return_meta=True)
+    seqs, info = io_target.load(str(tmp_path), cfg, dtype=np.float64, return_meta=True,
+                                coverage="full")
     st = info["stats"]
-    assert [s.period for s in seqs] == [1, 2]
+    assert [s.period for s in seqs] == [0]
     assert np.array_equal(np.concatenate([s.frame for s in seqs]), np.arange(7))
     h = np.concatenate([s.home for s in seqs])
     a = np.concatenate([s.away for s in seqs])
     b = np.concatenate([s.ball for s in seqs])
     assert h.shape == (7, 2, 2) and a.shape == (7, 2, 2) and b.shape == (7, 3)
-    assert list(seqs[0].home_slot) == [0, 2] and list(seqs[0].away_slot) == [1, 3]
+    assert list(seqs[0].extra["home_slot"]) == [0, 2] and list(seqs[0].extra["away_slot"]) == [1, 3]
     # frame 0 (id 1): metres about the centre, y up
     np.testing.assert_allclose(h[0, 0], [(0.1 - .5) * L, (.5 - .2) * W])
     np.testing.assert_allclose(a[0, 0], [(0.9 - .5) * L, (.5 - .8) * W])
@@ -74,6 +75,12 @@ def test_edge_cases(tmp_path):
     assert st["malformed"] == 1 and st["out_of_range"] + st["no_layout"] == 1 and st["odd_tokens"] >= 3
     assert seqs[0].home.dtype == np.float64
     assert io_target.load(str(tmp_path), cfg)[0].home.dtype == np.float32
+    # default coverage: exactly the graded blocks [2..1] is empty here, so use a wider fixture
+    g = io_target.load(str(tmp_path), small_cfg(7, 4, [[1, 2], [4, 5]]), dtype=np.float64)
+    assert [s.period for s in g] == [1, 2]
+    assert list(g[0].frame) == [1, 2] and list(g[1].frame) == [4, 5]
+    np.testing.assert_array_equal(g[0].home, h[1:3])
+    np.testing.assert_array_equal(g[1].ball, b[4:6])
 
 
 def test_spec_group_order_differs_from_player_order(tmp_path):
@@ -103,11 +110,13 @@ def test_save_load_roundtrip(tmp_path):
     P, B = random_game(np.random.default_rng(0), 50, [0, 1] * 3)
     tx = tags_xml([(0.0, 1.0, "BUILD UP", {"Team": "Barcelona", "Half": "1st Half"})])
     write_game(str(tmp_path), P, B, [0, 1] * 3, tags_xml=tx)
-    s = io_target.load(str(tmp_path), small_cfg(50, 20))[0]
+    s = io_target.load(str(tmp_path), small_cfg(50, 20, [[0, 19], [20, 49]]))[0]
     s.save(tmp_path / "s.npz")
     r = Sequence.load(tmp_path / "s.npz")
-    for k in ("frame", "ball", "home", "away", "pitch", "y", "home_slot", "away_slot"):
+    for k in ("frame", "ball", "home", "away", "pitch", "y"):
         np.testing.assert_array_equal(getattr(r, k), getattr(s, k))
+    for k in ("home_slot", "away_slot"):
+        np.testing.assert_array_equal(r.extra[k], s.extra[k])
     assert r.tags.tolist() == s.tags.tolist() and r.period == 1 and r.match_id == "BAR-ATH"
 
 
@@ -149,6 +158,22 @@ def test_tags_match_starter(tmp_path):
     assert [e["end_frame"] for e in ref] == list(t["end"])
 
 
+def test_kickoff_frames(tmp_path):
+    cfg = small_cfg(10000, 5000, [[1000, 4000], [5000, 9000]])
+    inst = [(30.0, 35.0, "SET PIECES", {"Team": "N/A", "Type": "Kick Off (Start)", "Half": "1st Half"}),
+            (100.0, 104.0, "SET PIECES", {"Type": "kick off (start)", "Half": "2nd Half"}),
+            (80.0, 84.0, "SET PIECES", {"Type": "KICK OFF (START)"}),       # no Half -> by block
+            (60.0, 62.0, "SET PIECES", {"Type": "Kick Off (After Goal)", "Half": "1st Half"}),
+            (20.0, 22.0, "BUILD UP", {"Team": "Barcelona"})]
+    p = tmp_path / "t.xml"
+    p.write_text(tags_xml(inst))
+    t = io_target.load_tags(str(p))
+    assert io_target.kickoff_frames(t, cfg) == {1: 750, 2: 2500}
+    assert io_target.kickoff_windows(t, cfg) == {1: (750, 875), 2: (2500, 2600)}
+    assert io_target.kickoff_frames(t[[3, 4]], cfg) == {1: None, 2: None}
+    assert io_target.kickoff_frames(None, cfg) == {1: None, 2: None}
+
+
 # ------------------------------------------------------------------ baseline parity
 def _official_codes(mod, folder, T):
     meta = os.path.join(folder, "BAR-ATH_tactical_atd.xml")
@@ -173,7 +198,8 @@ def test_baseline_parity_random(tmp_path, seed):
     write_game(str(tmp_path), P, B, sides)
     mod = official()
     ref = _official_codes(mod, str(tmp_path), T)
-    seqs = io_target.load(str(tmp_path), small_cfg(T, 1500), dtype=np.float64, with_tags=False)
+    seqs = io_target.load(str(tmp_path), small_cfg(T, 1500), dtype=np.float64, with_tags=False,
+                          coverage="full")
     mine = baseline.full_codes(seqs, T)
     assert np.array_equal(ref, mine)
     for w in (0, 25, 50, 125):

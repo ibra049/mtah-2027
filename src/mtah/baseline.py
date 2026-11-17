@@ -25,8 +25,10 @@ CHUNK = 16384
 
 def nearest_codes(seq) -> np.ndarray:
     """int8 [T]: 0 home, 1 away, -1 no answer. Needs float64 positions for exact parity."""
-    slots = np.concatenate([seq.home_slot, seq.away_slot]) if seq.home_slot is not None else \
-        np.arange(seq.home.shape[1] + seq.away.shape[1])
+    if "home_slot" in seq.extra:
+        slots = np.concatenate([seq.extra["home_slot"], seq.extra["away_slot"]])
+    else:
+        slots = np.arange(seq.home.shape[1] + seq.away.shape[1])
     order = np.argsort(slots, kind="stable")
     team = np.concatenate([np.zeros(seq.home.shape[1], np.int8),
                            np.ones(seq.away.shape[1], np.int8)])[order]
@@ -89,12 +91,29 @@ def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def provenance() -> None:
+    """One SAFE line proving which checkout's code is running (path + git commit)."""
+    import subprocess
+    from mtah import io_target
+    src = os.path.dirname(os.path.abspath(__file__))
+    try:
+        head = subprocess.run(["git", "-C", io_target.REPO, "rev-parse", "--short=12", "HEAD"],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+        dirty = subprocess.run(["git", "-C", io_target.REPO, "status", "--porcelain",
+                                "--untracked-files=no"], capture_output=True, text=True,
+                               timeout=20).stdout.strip()
+    except Exception:
+        head, dirty = "unknown", ""
+    print(f"SAFE| mtah_src={src} code_commit={head or 'unknown'} dirty={int(bool(dirty))}")
+
+
 def check_official(data_dir: str) -> int:
     """Rebuild the four published variants and compare SHA-256 with the vendored CSVs.
     Prints only SAFE| status lines."""
     from mtah import io_target
     cfg = io_target.load_config()
-    seqs = io_target.load(data_dir, cfg, dtype=np.float64, with_tags=False)
+    seqs = io_target.load(data_dir, cfg, dtype=np.float64, with_tags=False, coverage="full")
+    provenance()
     codes = full_codes(seqs, cfg["n_frames"])
     del seqs
     results_dir = os.path.join(io_target.REPO, "vendor", "challenge", "evaluation", "results")

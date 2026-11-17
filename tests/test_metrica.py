@@ -51,8 +51,8 @@ def test_g3_vs_kloppy(g3):
     ball = np.concatenate([s.ball for s in seqs])
     players = np.full((len(ball), len(meta.slot_player), 2), np.nan)
     for s in seqs:
-        players[s.frame[:, None], s.home_slot[None]] = s.home
-        players[s.frame[:, None], s.away_slot[None]] = s.away
+        players[s.frame[:, None], s.extra["home_slot"][None]] = s.home
+        players[s.frame[:, None], s.extra["away_slot"][None]] = s.away
     frames = df["frame_id"].to_numpy().astype(int) - 1
     assert len(frames) > 2500 and frames.max() > 130000
     bx = (df["ball_x"].to_numpy(float) - 0.5) * 105.0
@@ -100,7 +100,7 @@ def test_g3_baseline_parity(tmp_path):
                                     mod.team_of_each_track(str(folder / "BAR-ATH_tactical_atd.xml")),
                                     T, (105.3, 68.0))
     cfg = io_target.load_config()
-    cfg.update(n_frames=T, period_split_frame=T // 2)
+    cfg.update(n_frames=T, graded_blocks=[[0, T // 2 - 1], [T // 2, T - 1]])
     seqs = io_target.load(str(folder), cfg, dtype=np.float64, with_tags=False)
     mine = baseline.full_codes(seqs, T)
     assert (ref != -1).mean() > 0.5

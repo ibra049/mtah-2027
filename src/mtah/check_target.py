@@ -30,7 +30,10 @@ def main(data_dir=None):
     data_dir = data_dir or os.environ["MTAH_DATA"]
     cfg = io_target.load_config()
     doc = cfg["documented"]
-    seqs, info = io_target.load(data_dir, cfg, dtype=np.float32, return_meta=True)
+    from mtah.baseline import provenance
+    provenance()
+    seqs, info = io_target.load(data_dir, cfg, dtype=np.float32, return_meta=True,
+                                coverage="full")
     meta, seen, st, tags = info["meta"], info["seen"], info["stats"], info["tags"]
     n = cfg["n_frames"]
     checks = {}
@@ -57,7 +60,21 @@ def main(data_dir=None):
         duplicate=st["duplicate"], no_layout=st["no_layout"], odd_groups=st["odd_groups"],
         odd_tokens=st["odd_tokens"], odd_ball=st["odd_ball"])
     checks["frames"] = int(contiguous and seen.all() and st["lines"] == n and st["malformed"] == 0)
-    say(periods=len(seqs), period_lengths=",".join(str(len(s)) for s in seqs))
+
+    # --- the default (graded) load: exactly the two published blocks as periods 1 and 2
+    graded = io_target.load(data_dir, cfg, dtype=np.float32)
+    blocks_ok = int(len(graded) == 2 and [s.period for s in graded] == [1, 2] and all(
+        s.frame[0] == a and s.frame[-1] == b and np.array_equal(s.frame, np.arange(a, b + 1))
+        for s, (a, b) in zip(graded, cfg["graded_blocks"])))
+    same = int(all(np.array_equal(np.isnan(s.ball), np.isnan(seqs[0].ball[s.frame])) and
+                   np.array_equal(np.isnan(s.home), np.isnan(seqs[0].home[s.frame]))
+                   for s in graded))
+    slots_extra = int(all("home_slot" in s.extra and "away_slot" in s.extra for s in graded))
+    say(graded_periods=len(graded), graded_lengths=",".join(str(len(s)) for s in graded),
+        graded_blocks_ok=blocks_ok, graded_matches_full=same, slot_extra=slots_extra,
+        tags_per_period=",".join(str(0 if s.tags is None else len(s.tags)) for s in graded))
+    checks["graded_load"] = int(blocks_ok and same and slots_extra)
+    del graded
 
     # --- coordinates within pitch bounds (metres about the centre)
     L, W = cfg["pitch"]
@@ -96,6 +113,18 @@ def main(data_dir=None):
                                (tags["end"] >= tags["start"])).all()))
         checks["tags"] = int(len(tags) == doc["n_tags"] and nt["H"] == doc["n_tags_H"]
                              and nt["A"] == doc["n_tags_A"] and nt["N"] == doc["n_tags_N"])
+
+    # --- kickoff tags: found per half, and contains the published kickoff frame (check only)
+    if tags is not None:
+        win = io_target.kickoff_windows(tags, cfg)
+        pub = cfg["documented"]["published_kickoff_frames"]
+        found = {p: int(win[p] is not None) for p in (1, 2)}
+        contains = {p: int(win[p] is not None and win[p][0] <= pub[str(p)] <= win[p][1])
+                    for p in (1, 2)}
+        say(kickoff_tag_found_h1=found[1], kickoff_tag_found_h2=found[2],
+            kickoff_tag_contains_published_h1=contains[1],
+            kickoff_tag_contains_published_h2=contains[2])
+        checks["kickoff"] = int(all(found.values()) and all(contains.values()))
 
     # --- teams on opposite sides per half, swapping at halftime (sign only)
     signs = []

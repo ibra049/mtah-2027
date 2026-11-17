@@ -1,14 +1,30 @@
 {
-  "_doc": "Documented constants of the target recording (vendor/challenge/DATA.md, games.py). Not tuned on anything.",
+  "_doc": "Documented constants of the target recording (vendor/challenge/DATA.md, games.py). Not tuned on anything. published_kickoff_frames are used ONLY by check_target (never by the pipeline).",
   "game": "BAR-ATH",
   "stem": "BAR-ATH_tactical",
   "n_frames": 199319,
   "fps": 25,
-  "pitch": [105.3, 68.0],
-  "graded_blocks": [[11185, 90651], [110808, 190197]],
-  "period_split_frame": 110808,
+  "pitch": [
+    105.3,
+    68.0
+  ],
+  "graded_blocks": [
+    [
+      11185,
+      90651
+    ],
+    [
+      110808,
+      190197
+    ]
+  ],
   "home_name_contains": "barcelona",
-  "tag_team_map": {"barcelona": "H", "atletic club": "A", "athletic club": "A", "n/a": "N"},
+  "tag_team_map": {
+    "barcelona": "H",
+    "atletic club": "A",
+    "athletic club": "A",
+    "n/a": "N"
+  },
   "documented": {
     "n_ball_present_all": 113488,
     "n_ball_present_graded": 94214,
@@ -17,6 +33,10 @@
     "n_tags_H": 314,
     "n_tags_A": 288,
     "n_tags_N": 36,
-    "n_slots": 46
+    "n_slots": 46,
+    "published_kickoff_frames": {
+      "1": 11185,
+      "2": 113742
+    }
   }
 }

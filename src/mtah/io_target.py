@@ -9,7 +9,7 @@ Conventions (CONTRACT.md):
     (x along the length, y across, right-handed; Metrica's normalised y grows downwards).
   * NaN for every missing observation (ball and players).
   * slots: every <Player> of the metadata in file order is one slot; home = first <Team>.
-    home[:, k] holds the k-th home slot, home_slot[k] its global slot index.
+    home[:, k] holds the k-th home slot; extra['home_slot'][k] is its global slot index.
   * the raw text layout is read from <DataFormatSpecification> (per frame range), so
     group order, field count (x,y[,speed]) and ball channels come from the metadata.
 """
@@ -321,24 +321,28 @@ def to_metres(arr: np.ndarray, length: float, width: float) -> np.ndarray:
     return arr
 
 
-def sequences_from_arrays(match_id, players, ball, meta, pitch, split_frames, first_frame=0,
-                          tags=None):
-    """Cut global arrays (index 0 == frame `first_frame`) into one Sequence per period."""
-    T = players.shape[0]
-    bounds = [0] + [s - first_frame for s in split_frames if 0 < s - first_frame < T] + [T]
+def ranges_from_splits(n_frames, split_frames):
+    """[(period, first, last)] covering 0..n_frames-1, cut at each split frame."""
+    cuts = [0] + [f for f in split_frames if 0 < f < n_frames] + [n_frames]
+    return [(i + 1, a, b - 1) for i, (a, b) in enumerate(zip(cuts[:-1], cuts[1:]))]
+
+
+def sequences_from_arrays(match_id, players, ball, meta, pitch, ranges, tags=None):
+    """Global arrays (index == video frame) -> one Sequence per (period, first, last) range,
+    inclusive. Provider slot indices go to extra['home_slot'] / extra['away_slot']."""
     hs, aw = meta.home_slots, meta.away_slots
     seqs = []
-    for period, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]), start=1):
-        frames = np.arange(first_frame + a, first_frame + b, dtype=np.int64)
+    for period, a, b in ranges:
+        frames = np.arange(a, b + 1, dtype=np.int64)
         seq_tags = None
         if tags is not None:
-            m = (tags["end"] > frames[0]) & (tags["start"] <= frames[-1])
+            m = (tags["end"] > a) & (tags["start"] <= b)
             seq_tags = tags[m].copy()
         seqs.append(Sequence(
-            match_id=match_id, period=period, frame=frames, ball=ball[a:b].copy(),
-            home=players[a:b][:, hs].copy(), away=players[a:b][:, aw].copy(),
-            pitch=np.asarray(pitch, dtype=np.float32), y=np.full(b - a, -1, dtype=np.int8),
-            tags=seq_tags, home_slot=hs, away_slot=aw))
+            match_id=match_id, period=period, frame=frames, ball=ball[a:b + 1].copy(),
+            home=players[a:b + 1][:, hs].copy(), away=players[a:b + 1][:, aw].copy(),
+            pitch=np.asarray(pitch, dtype=np.float32), y=np.full(b + 1 - a, -1, dtype=np.int8),
+            tags=seq_tags, extra={"home_slot": hs.copy(), "away_slot": aw.copy()}))
     return seqs
 
 
@@ -384,39 +388,94 @@ def target_paths(data_dir: str, cfg: dict | None = None) -> dict:
 
 
 def load_epts(meta_path, raw_path, match_id, pitch=None, split_frames=None, n_frames=None,
-              dtype=np.float32, tags=None, return_meta=False):
-    """Generic EPTS pair -> list[Sequence]. frame = frame_id - 1."""
+              dtype=np.float32, tags=None, return_meta=False, ranges=None):
+    """Generic EPTS pair -> list[Sequence]. frame = frame_id - 1. `ranges` [(period, first,
+    last)] selects frames; default: split at `split_frames` (or the provider's
+    second_half_start)."""
     meta = parse_meta(meta_path)
     players, ball, seen, stats = read_raw(raw_path, meta, n_frames=n_frames, first_frame_id=1,
                                           dtype=dtype)
     L, W = pitch if pitch is not None else meta.field_size
     to_metres(players, L, W)
     to_metres(ball, L, W)
-    if split_frames is None:
-        s = meta.provider_params.get("second_half_start", "")
-        split_frames = [int(s) - 1] if s.isdigit() else []
-    seqs = sequences_from_arrays(match_id, players, ball, meta, (L, W), split_frames, 0, tags)
+    if ranges is None:
+        if split_frames is None:
+            s = meta.provider_params.get("second_half_start", "")
+            split_frames = [int(s) - 1] if s.isdigit() else []
+        ranges = ranges_from_splits(players.shape[0], split_frames)
+    seqs = sequences_from_arrays(match_id, players, ball, meta, (L, W), ranges, tags)
     del players, ball
     if return_meta:
         return seqs, meta, seen, stats
     return seqs
 
 
+def graded_ranges(cfg: dict) -> list:
+    """[(1, 11185, 90651), (2, 110808, 190197)] -- games.half_video_blocks, from the config."""
+    return [(i + 1, int(a), int(b)) for i, (a, b) in enumerate(cfg["graded_blocks"])]
+
+
 def load(data_dir: str, cfg: dict | None = None, dtype=np.float32, with_tags: bool = True,
-         return_meta: bool = False):
-    """CONTRACT: tactical ATD (+ Smart Tagging) -> [period 1, period 2] Sequences covering all
-    frames 0..n_frames-1. Period 2 starts at the second graded block (cfg period_split_frame)."""
+         return_meta: bool = False, coverage: str = "graded"):
+    """CONTRACT: tactical ATD (+ Smart Tagging) -> Sequences.
+
+    coverage="graded" (default): exactly two Sequences, the graded blocks, periods 1 and 2.
+    coverage="full": one Sequence, period 0, all n_frames video frames -- only for the official
+    baseline reproduction (its smoothing window reaches past the block edges) and parse checks.
+    """
     cfg = cfg or load_config()
     paths = target_paths(data_dir, cfg)
     tags = None
     if with_tags and os.path.isfile(paths["smart_tagging"]):
         tags = load_tags(paths["smart_tagging"], cfg["fps"], cfg["tag_team_map"])
-    out = load_epts(paths["atd_meta"], paths["atd_raw"], cfg["game"], pitch=tuple(cfg["pitch"]),
-                    split_frames=[cfg["period_split_frame"]], n_frames=cfg["n_frames"],
-                    dtype=dtype, tags=tags, return_meta=True)
-    seqs, meta, seen, stats = out
-    for s in seqs:
-        s.meta["home_name"] = meta.team_names[0]
+    if coverage == "graded":
+        ranges = graded_ranges(cfg)
+    elif coverage == "full":
+        ranges = [(0, 0, cfg["n_frames"] - 1)]
+    else:
+        raise ValueError(f"coverage must be 'graded' or 'full', not {coverage!r}")
+    seqs, meta, seen, stats = load_epts(
+        paths["atd_meta"], paths["atd_raw"], cfg["game"], pitch=tuple(cfg["pitch"]),
+        n_frames=cfg["n_frames"], dtype=dtype, tags=tags, return_meta=True, ranges=ranges)
     if return_meta:
         return seqs, dict(meta=meta, seen=seen, stats=stats, tags=tags)
     return seqs
+
+
+def kickoff_frames(tags, cfg: dict | None = None) -> dict:
+    """{period: start frame of the 'Kick Off (Start)' Smart Tag window, or None}.
+
+    Matched on the Type tag, case-insensitive. Period from the Half tag ('1st Half'/'2nd Half');
+    if that is missing, from the graded block the window overlaps. If a half has several, the
+    earliest start wins. No kickoff frame is hard-coded here: this reads the tags only.
+    """
+    cfg = cfg or load_config()
+    out = {p: None for p, _, _ in graded_ranges(cfg)}
+    if tags is None:
+        return out
+    half_names = {"1st half": 1, "2nd half": 2}
+    for t in tags:
+        if str(t["type"]).strip().lower() != "kick off (start)":
+            continue
+        period = half_names.get(str(t["half"]).strip().lower())
+        if period is None:
+            period = next((p for p, a, b in graded_ranges(cfg)
+                           if t["end"] > a and t["start"] <= b), None)
+        if period in out and (out[period] is None or int(t["start"]) < out[period]):
+            out[period] = int(t["start"])
+    return out
+
+
+def kickoff_windows(tags, cfg: dict | None = None) -> dict:
+    """{period: (start, end) of the window kickoff_frames picked, or None} (for checks)."""
+    starts = kickoff_frames(tags, cfg)
+    out = {}
+    for p, st in starts.items():
+        hit = None
+        if st is not None:
+            for t in tags:
+                if (str(t["type"]).strip().lower() == "kick off (start)" and int(t["start"]) == st):
+                    hit = (int(t["start"]), int(t["end"]))
+                    break
+        out[p] = hit
+    return out

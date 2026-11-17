@@ -20,7 +20,9 @@ def run(data_dir: str, config: dict, out: str) -> str:
     tcfg = io_target.load_config()
     method = config.get("method", "baseline")
     if method == "baseline":
-        seqs = io_target.load(data_dir, tcfg, dtype=np.float64, with_tags=False)
+        # the official smoother reads +/-window frames past the graded edges, so the reference
+        # baseline needs every frame; submit.write still puts X outside the graded blocks.
+        seqs = io_target.load(data_dir, tcfg, dtype=np.float64, with_tags=False, coverage="full")
         labels = baseline.predict_labels(seqs, tcfg["n_frames"], int(config.get("window", 50)))
     else:
         raise ValueError(f"unknown method {method!r}")
@@ -36,6 +38,8 @@ def main(argv=None):
     with open(args.config) as fh:
         config = json.load(fh)
     t0 = time.time()
+    from mtah.baseline import provenance
+    provenance()
     sha = run(args.data_dir, config, args.out)
     from mtah import io_target, submit
     reason = submit.validate(args.out, io_target.load_config()["n_frames"])
