@@ -4,6 +4,8 @@ Team **Montreal**'s entry to the Initial Challenge. For every frame of the tacti
 FC Barcelona vs Athletic Club, the file gives `H` (Barcelona in possession), `A` (Athletic) or
 `D` (dead ball). The method is in [docs/Montreal.md](docs/Montreal.md).
 
+Team members: Ibrahim El Makhtoum, Sadeel Albanna, Omar Morsi, Rashid Abu Safia, Mariam Al Amad.
+
 This repository holds **code only**:
 - No competition data.
 - No frame-level output derived from it.

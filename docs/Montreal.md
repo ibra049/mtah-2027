@@ -1,6 +1,7 @@
 # Montreal: frame-level possession from automatic tracking
 
-More Than A Hack 2027, Initial Challenge. Team **Montreal**.
+More Than A Hack 2027, Initial Challenge. Team **Montreal**: Ibrahim El Makhtoum, Sadeel Albanna,
+Omar Morsi, Rashid Abu Safia, Mariam Al Amad.
 Code: https://github.com/ibra049/mtah-2027 (one command regenerates the file; Section 11).
 
 > **Status.** Shipped candidate: **v4p** (Sections 7–9). On the two held-out DFL matches,

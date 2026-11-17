@@ -32,3 +32,9 @@ outputs/
 coord/
 .venv
 .venv.icloud-old/
+
+# internal orchestration files (not part of the method)
+prompts/
+coord/
+.claude/settings.json
+.claude/settings.local.json
