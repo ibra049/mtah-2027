@@ -172,12 +172,23 @@ def _head_weight(head, Y, cfg):
     return np.where(Y[:, 2] == 1, ratio, 1.0).astype(np.float32)
 
 
-def _params(cfg, head):
+def head_excluded(names, cfg, head) -> list:
+    """Names a head may not split on: cfg["head_drop"][head], regexes matched with re.search.
+    (The alive/dead head stays out of touch timing and regime descriptors, for example.)"""
+    pats = [re.compile(p) for p in cfg.get("head_drop", {}).get(head, [])]
+    return [n for n in names if any(p.search(n) for p in pats)]
+
+
+def _params(cfg, head, names=None):
     p = dict(objective="binary", verbose=-1, deterministic=True, force_row_wise=True,
              seed=int(cfg["seed"]), bagging_seed=int(cfg["seed"]) + 1,
              feature_fraction_seed=int(cfg["seed"]) + 2, data_random_seed=int(cfg["seed"]) + 3)
     p.update(cfg["lgb"])
     p.update(cfg.get("lgb_" + head, {}))
+    if names is not None:
+        out = set(head_excluded(names, cfg, head))
+        if out:        # a zero gain multiplier: the feature can never win a split
+            p["feature_contri"] = [0.0 if n in out else 1.0 for n in names]
     return p
 
 
@@ -230,7 +241,7 @@ def fit_arrays(X, Y, names, cfg, valid=None, log=None) -> dict:
             kw = dict(valid_sets=[ds.create_valid(Xv if vidx is None else Xv[vidx],
                                                   label=yv.astype(np.float32))],
                       valid_names=["valid"], callbacks=[lgb.record_evaluation(evals)])
-        params = _params(cfg, head)
+        params = _params(cfg, head, names)
         params["feature_pre_filter"] = False
         art[head] = lgb.train(params, ds, num_boost_round=rounds, **kw)
         art["n_rows"][head] = int(len(yh))

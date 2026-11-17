@@ -6,6 +6,12 @@ from mtah import features
 from mtah.canonical import A, H
 
 
+def compute(seq, version=3):
+    """The tests written for feature versions 2/3 keep running on version 3; version 4 has its
+    own tests at the end of this file, and the invariance tests run on both."""
+    return features.compute(seq, version)
+
+
 @pytest.fixture(scope="module")
 def seq():
     return make_seq(T=1200, seed=1)
@@ -13,7 +19,7 @@ def seq():
 
 @pytest.fixture(scope="module")
 def XN(seq):
-    return features.compute(seq)
+    return compute(seq)
 
 
 def test_shape_dtype_names(seq, XN):
@@ -27,16 +33,16 @@ def test_shape_dtype_names(seq, XN):
 
 def test_deterministic_and_fixed_order(seq, XN):
     X, names = XN
-    X2, names2 = features.compute(seq)
+    X2, names2 = compute(seq)
     assert names2 == names
     np.testing.assert_array_equal(X, X2)
-    other = features.compute(make_seq(T=300, seed=5, slots=23))[1]
+    other = compute(make_seq(T=300, seed=5, slots=23))[1]
     assert other == names                        # order does not depend on the data
 
 
 def test_swap_is_exact(seq, XN):
     X, names = XN
-    Xs, names_s = features.compute(features.swap_seq(seq))
+    Xs, names_s = compute(features.swap_seq(seq))
     assert names_s == names
     np.testing.assert_array_equal(Xs, features.swap_features(X, names))
     # and it is an involution
@@ -56,7 +62,7 @@ def test_pitch_mirror_invariance(seq, XN, flip):
     m.ball[:, :2] *= f
     m.home *= f
     m.away *= f
-    Xm, _ = features.compute(m)
+    Xm, _ = compute(m)
     np.testing.assert_allclose(Xm, X, rtol=1e-4, atol=1e-4)
 
 
@@ -71,7 +77,7 @@ def test_slot_order_does_not_matter(seq, XN):
     p = seq.copy()
     p.home = p.home[:, rng.permutation(p.home.shape[1])]
     p.away = p.away[:, rng.permutation(p.away.shape[1])]
-    Xp, _ = features.compute(p)
+    Xp, _ = compute(p)
     np.testing.assert_allclose(Xp, X, rtol=1e-4, atol=1e-4)
 
 
@@ -80,9 +86,9 @@ def test_ignores_ball_height_and_labels(seq, XN):
     s = seq.copy()
     s.ball[:, 2] = np.nan
     s.y[:] = -1
-    np.testing.assert_array_equal(features.compute(s)[0], X)
+    np.testing.assert_array_equal(compute(s)[0], X)
     s.ball[:, 2] = 7.0
-    np.testing.assert_array_equal(features.compute(s)[0], X)
+    np.testing.assert_array_equal(compute(s)[0], X)
 
 
 def test_gap_features(seq, XN):
@@ -103,7 +109,7 @@ def test_gap_features(seq, XN):
 
 def test_nan_heavy_inputs_do_not_break():
     s = make_seq(T=400, seed=3)
-    names = features.compute(s)[1]
+    names = compute(s)[1]
     cases = []
     a = s.copy(); a.ball[:] = np.nan; cases.append(a)                      # ball never seen
     b = s.copy(); b.home[:] = np.nan; cases.append(b)                      # a team never seen
@@ -112,10 +118,10 @@ def test_nan_heavy_inputs_do_not_break():
     d = s.copy(); d.home = d.home[:, :2]; d.away = d.away[:, :1]; cases.append(d)   # K < 3
     e = make_seq(T=7, seed=4); cases.append(e)                             # shorter than the lags
     for q in cases:
-        X, n = features.compute(q)
+        X, n = compute(q)
         assert n == names and X.shape == (len(q), len(names))
         assert not np.isinf(X).any()
-    Xa = features.compute(a)[0]
+    Xa = compute(a)[0]
     assert np.isnan(Xa[:, names.index("n_t_since")]).all()
     assert np.isfinite(Xa[:, names.index("n_sp_mean")]).mean() > 0.9       # player cues survive
 
@@ -181,7 +187,7 @@ def _kick_seq(hidden):
 
 def test_seen_touches():
     s = _kick_seq(hidden=False)
-    X, names = features.compute(s)
+    X, names = compute(s)
     col = dict(zip(names, X.T))
     ev = features.touch_events(s.ball[:, :2], ~np.isnan(s.ball[:, 0]), s.home, s.away,
                                np.linalg.norm(s.home - s.ball[:, None, :2], axis=2).min(1),
@@ -213,7 +219,7 @@ def test_hidden_touch_is_reconstructed_inside_the_gap():
     assert hid.sum() == 1 and ev["s"][hid][0] == 1               # the kicker's team
     assert abs(int(ev["t"][hid][0]) - 100) <= 2                  # at the true kick time
     assert ev["d"][hid][0] == pytest.approx(np.hypot(0.5, 0.3), abs=0.3)
-    X, names = features.compute(s)
+    X, names = compute(s)
     col = dict(zip(names, X.T))
     assert col["d_tch_last"][130] == 1 and col["n_tch_last_hid"][130] == 1
     # a ball that crosses a gap on a straight line was not touched
@@ -240,7 +246,7 @@ def test_regime_descriptors(seq, XN):
     s = seq.copy()
     s.ball[:] = np.nan
     s.ball[0, :2] = 0.0
-    c2 = dict(zip(names, features.compute(s)[0].T))
+    c2 = dict(zip(names, compute(s)[0].T))
     assert c2["n_reg_gap10"][0] == 1.0 and c2["n_reg_gapmed"][0] == pytest.approx((len(s) - 1) / 25, abs=1e-3)
 
 
@@ -249,7 +255,7 @@ def test_gap_clock_runs_past_30_s():
     s.ball[100:1000] = np.nan                               # a gap of at least 36 s
     seen = np.flatnonzero(~np.isnan(s.ball[:, 0]))
     last, nxt = seen[seen < 100].max(), seen[seen >= 1000].min()
-    X, names = features.compute(s)
+    X, names = compute(s)
     col = dict(zip(names, X.T))
     assert col["n_t_since"][990] == pytest.approx((990 - last) / 25, abs=1e-3) and col["n_t_since"][990] > 30
     assert col["n_t_until"][101] == pytest.approx((nxt - 101) / 25, abs=1e-3) and col["n_t_until"][101] > 30
@@ -277,7 +283,7 @@ def test_touch_threshold_follows_the_noise():
         away[:, 0], away[:, 1], away[:, 2] = (16.7, -0.2), (25.0, 12.0), (45.0, 0.0)
         s = Sequence("N", 1, np.arange(T, dtype=np.int64), ball, home, away,
                      np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
-        X, names = features.compute(s)
+        X, names = compute(s)
         col = dict(zip(names, X.T))
         counts[name] = (float(col["n_reg_jscale"][0]), int((col["n_kick_tlast"] == 0).sum()),
                         int((col["n_tch_tlast"] == 0).sum()))
@@ -293,14 +299,14 @@ def test_objects_far_outside_the_pitch_are_ignored(seq, XN):
     K = s.home.shape[1]
     s.home = np.concatenate([s.home, np.full((len(s), 1, 2), np.nan, np.float32)], 1)
     s.home[:, K] = (-60.0, 5.0) if features.attack_dir(seq) > 0 else (60.0, 5.0)   # 7.5 m behind the home goal
-    X2, _ = features.compute(s)
+    X2, _ = compute(s)
     skip = [i for i, n in enumerate(names)]
     np.testing.assert_allclose(X2[:, skip], X[:, skip], rtol=1e-4, atol=1e-4)
     # a taker one metre outside the touchline still counts
     s2 = seq.copy()
     s2.home = np.concatenate([s2.home, np.full((len(s2), 1, 2), np.nan, np.float32)], 1)
     s2.home[:, K] = (0.0, 35.0)
-    X3, _ = features.compute(s2)
+    X3, _ = compute(s2)
     assert X3[0, names.index("h_touch")] == pytest.approx(-1.0, abs=1e-3)
 
 
@@ -334,7 +340,7 @@ def test_speed_floor_makes_standing_and_jittering_players_equal():
         ball = np.zeros((T, 3), np.float32)
         s = Sequence("F", 1, np.arange(T, dtype=np.int64), ball, spots[0] + wander[:, 0],
                      spots[1] + wander[:, 1], np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
-        X, names = features.compute(s)
+        X, names = compute(s)
         out[name] = dict(zip(names, X.T))
     mid = slice(50, 550)
     assert np.nanmean(out["jitter"]["n_sp_mean"][mid]) > np.nanmean(out["still"]["n_sp_mean"][mid]) + 0.2
@@ -358,20 +364,20 @@ def test_movement_coherence():
     ball = np.zeros((T, 3), np.float32)
     mk = lambda h, a: Sequence("C", 1, np.arange(T, dtype=np.int64), ball, h.astype(np.float32),   # noqa: E731
                                a.astype(np.float32), np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
-    X, names = features.compute(mk(base[0] + shift, base[1] + shift))
+    X, names = compute(mk(base[0] + shift, base[1] + shift))
     assert np.nanmean(X[50:350, names.index("n_coh")]) > 0.9
     ang = rng.uniform(0, 2 * np.pi, (2, K))
     drift = np.stack([np.cos(ang), np.sin(ang)], -1) * (2.0 / 25)         # 2 m/s, random headings
-    X, names = features.compute(mk(base[0] + t * drift[0], base[1] + t * drift[1]))
+    X, names = compute(mk(base[0] + t * drift[0], base[1] + t * drift[1]))
     assert np.nanmean(X[50:350, names.index("n_coh")]) < 0.4
 
 
 def test_feature_versions(seq):
-    X2, n2 = features.compute(seq, version=2)
-    X3, n3 = features.compute(seq, version=3)
+    X2, n2 = compute(seq, version=2)
+    X3, n3 = compute(seq, version=3)
     assert n2 == n3
     with pytest.raises(ValueError):
-        features.compute(seq, version=1)
+        compute(seq, version=1)
     col2, col3 = dict(zip(n2, X2.T)), dict(zip(n3, X3.T))
     # version 2: every tracked object counts; version 3 ignores the ones far outside the pitch
     raw = (~np.isnan(seq.home[..., 0])).sum(1) + (~np.isnan(seq.away[..., 0])).sum(1)
@@ -379,5 +385,145 @@ def test_feature_versions(seq):
     assert col3["n_reg_players"][0] < col2["n_reg_players"][0]
     # both stay exactly team-symmetric
     for v, X in ((2, X2), (3, X3)):
-        np.testing.assert_array_equal(features.compute(features.swap_seq(seq), v)[0],
+        np.testing.assert_array_equal(compute(features.swap_seq(seq), v)[0],
                                       features.swap_features(X, n2))
+
+
+# ------------------------------------------------------------------ feature version 4
+@pytest.fixture(scope="module")
+def XN4(seq):
+    return features.compute(seq, 4)
+
+
+def test_v4_is_the_default_and_keeps_every_invariance(seq, XN4):
+    X, names = XN4
+    Xd, nd = features.compute(seq)
+    assert features.FEATURE_VERSION == 4 and nd == names
+    np.testing.assert_array_equal(Xd, X)
+    assert X.dtype == np.float32 and len(set(names)) == len(names) and not np.isinf(X).any()
+    assert all(n[:2] in ("n_", "h_", "a_", "d_") for n in names)
+    np.testing.assert_array_equal(np.round(X.astype(np.float64), 4).astype(np.float32), X)
+    # exact team symmetry
+    Xs, ns = features.compute(features.swap_seq(seq), 4)
+    assert ns == names
+    np.testing.assert_array_equal(Xs, features.swap_features(X, names))
+    # pitch mirroring
+    for flip in ((-1, 1), (1, -1), (-1, -1)):
+        m = seq.copy()
+        f = np.array(flip, np.float32)
+        m.ball[:, :2] *= f
+        m.home *= f
+        m.away *= f
+        np.testing.assert_allclose(features.compute(m, 4)[0], X, rtol=1e-4, atol=1e-4)
+    # slot order, ball height, labels
+    rng = np.random.default_rng(0)
+    q = seq.copy()
+    q.home = q.home[:, rng.permutation(q.home.shape[1])]
+    q.away = q.away[:, rng.permutation(q.away.shape[1])]
+    q.ball[:, 2] = 9.0
+    q.y[:] = -1
+    np.testing.assert_allclose(features.compute(q, 4)[0], X, rtol=1e-4, atol=1e-4)
+
+
+def test_v4_nan_heavy_inputs_do_not_break():
+    s = make_seq(T=400, seed=3)
+    names = features.compute(s, 4)[1]
+    cases = []
+    a = s.copy(); a.ball[:] = np.nan; cases.append(a)
+    b = s.copy(); b.home[:] = np.nan; cases.append(b)
+    c = s.copy(); c.home[100:200] = np.nan; c.away[150:250] = np.nan; c.ball[:300] = np.nan; cases.append(c)
+    d = s.copy(); d.home = d.home[:, :2]; d.away = d.away[:, :1]; cases.append(d)
+    cases.append(make_seq(T=7, seed=4))
+    for q in cases:
+        X, n = features.compute(q, 4)
+        assert n == names and X.shape == (len(q), len(names)) and not np.isinf(X).any()
+
+
+def test_canonicalize_fills_short_gaps_and_keeps_long_ones():
+    s = make_seq(T=1200, seed=6, ball_missing=0.0)
+    s.ball[100:120] = np.nan                    # 0.8 s: filled
+    s.ball[400:500] = np.nan                    # 4 s: stays a gap
+    before = s.ball.copy()
+    c = features.canonicalize(s)
+    np.testing.assert_array_equal(s.ball, before)                     # input untouched
+    assert c.ball.shape == s.ball.shape and c.home.shape == s.home.shape and (c.frame == s.frame).all()
+    seen = ~np.isnan(c.ball[:, 0])
+    assert seen[100:120].all() and not seen[400:500].any() and seen[:100].all() and seen[500:].all()
+    # players: observed mask unchanged (never interpolated), apart from the off-pitch filter
+    inp = features._in_play(s)
+    np.testing.assert_array_equal(np.isnan(c.home), np.isnan(inp.home))
+    X, names = features.compute(s, 4)
+    col = dict(zip(names, X.T))
+    assert (col["n_obs"][100:120] == 1).all() and (col["n_gap"][100:120] == 0).all()
+    assert col["n_gap"][450] == pytest.approx(100 / 25, abs=1e-3)
+    assert not any(n in names for n in ("n_reg_players", "n_reg_pjit", "n_reg_jscale", "n_reg_gapmed", "n_reg_gap2"))
+    assert all(n in names for n in ("n_reg_miss", "n_reg_gap4", "n_reg_gap10", "n_reg_gap20", "n_reg_gap30"))
+
+
+def test_canonicalize_makes_jittered_and_smooth_tracks_alike():
+    """A straight 8 m/s ball and standing players, once clean and once with 0.3 m of slow
+    jitter: after canonicalisation frame-to-frame velocities are smooth on both (lag-1
+    autocorrelation near 1, as on a low-pass-filtered tracker), and the filter does not move
+    a clean straight track."""
+    from mtah.canonical import Sequence
+    T, K = 1500, 6
+    rng = np.random.default_rng(5)
+    x = np.abs((np.arange(T) % 500) - 250) * (8.0 / 25) - 40.0
+    spots = np.stack([rng.uniform(-40, 40, (2, K)), rng.uniform(-30, 30, (2, K))], -1).astype(np.float32)
+    def autocorr(b):
+        v = np.diff(b, axis=0)
+        a, c = v[:-1] - v[:-1].mean(0), v[1:] - v[1:].mean(0)
+        return float((a * c).sum() / np.sqrt((a * a).sum() * (c * c).sum()))
+    out = {}
+    for name, sigma in (("clean", 0.0), ("jitter", 0.3)):
+        ball = np.zeros((T, 3), np.float32)
+        ball[:, 0] = x
+        e = np.cumsum(rng.normal(0, 1, (T + 10, 2)), 0)
+        ball[:, :2] += ((e[10:] - e[:-10]) / np.sqrt(10) * sigma).astype(np.float32)
+        s = Sequence("J", 1, np.arange(T, dtype=np.int64), ball,
+                     np.broadcast_to(spots[0], (T, K, 2)).copy(), np.broadcast_to(spots[1], (T, K, 2)).copy(),
+                     np.array([105.0, 68.0], np.float32), np.zeros(T, np.int8))
+        c = features.canonicalize(s)
+        out[name] = (autocorr(s.ball[:, :2]), autocorr(c.ball[:, :2]), c.ball[:, :2], s.ball[:, :2])
+    assert out["jitter"][0] < 0.8 and out["jitter"][1] > 0.93          # raw jittery, canonical smooth
+    assert out["clean"][1] > 0.93
+    mid = slice(20, 230)                                                # inside a straight leg
+    np.testing.assert_allclose(out["clean"][2][mid], out["clean"][3][mid], atol=1e-3)
+
+
+def test_v4_touches_on_a_filtered_track():
+    """A kick and a reception survive the low-pass filter: found by both v4 streams with the
+    right teams, near the true frames, also when the ball is hidden around the kick for 2 s."""
+    s = _kick_seq(hidden=False)
+    c = features.canonicalize(s)
+    ev = features.touch_events_v4(c)
+    assert set(ev) >= {"t", "s", "hid", "mag", "stream"}
+    m = ev["stream"] == 0                                               # the sensitive stream
+    assert ev["s"][m].tolist() == [1.0, -1.0]
+    assert abs(int(ev["t"][m][0]) - 100) <= 4 and abs(int(ev["t"][m][1]) - 150) <= 4
+    strict = ev["t"][ev["stream"] == 1]                                  # the strict one is a subset
+    assert set(strict.tolist()) <= set(ev["t"][m].tolist())
+    X, names = features.compute(s, 4)
+    col = dict(zip(names, X.T))
+    assert col["d_tch_last"][125] == 1 and col["d_tch_next"][125] == -1
+    assert col["d_turn"][100] > 0 and col["d_turn"][150] < 0           # home turns it, then away
+    h = _kick_seq(hidden=False)
+    h.ball[80:130] = np.nan                                             # 2 s gap around the kick
+    ev = features.touch_events_v4(features.canonicalize(h))
+    hid = ev["hid"] == 1
+    assert hid.any() and (ev["s"][hid] == 1).all() and abs(int(ev["t"][hid][0]) - 100) <= 6
+
+
+def test_v4_hold_features():
+    """Home is nearest (ball at its feet) until the pass arrives at the away player."""
+    s = _kick_seq(hidden=False)
+    X, names = features.compute(s, 4)
+    col = dict(zip(names, X.T))
+    assert (col["d_hold"][10:120] == 1).all() and (col["d_hold"][140:290] == -1).all()
+    flip = int(np.flatnonzero(col["d_hold"] == -1)[0])                  # the frame away becomes nearest
+    assert 115 <= flip <= 135
+    assert col["n_hold_since"][flip + 25] == pytest.approx(1.0, abs=1e-3)
+    assert col["n_hold_until"][flip - 25] == pytest.approx(1.0, abs=1e-3)
+    assert col["d_hold_since"][flip + 25] == pytest.approx(-1.0, abs=1e-3)
+    assert col["n_hold_prev"][flip + 25] == pytest.approx(flip / 25, abs=0.05)   # home held it from frame 0
+    assert col["n_hold_next"][flip - 25] == features.T_CAP_S                      # nobody after away
