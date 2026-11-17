@@ -19,7 +19,12 @@ import numpy as np
 
 from .canonical import A, D, FPS, H
 
-_VENDOR = Path(__file__).resolve().parents[2] / "vendor" / "challenge" / "evaluation" / "possession_metrics.py"
+_ROOT = Path(__file__).resolve().parents[2]
+# Committed MIT copy first (works in worktrees and on a clean public clone); the gitignored
+# checkout of the official repo is only a fallback.
+_VENDOR = _ROOT / "third_party" / "mtah_challenge" / "possession_metrics.py"
+if not _VENDOR.exists():
+    _VENDOR = _ROOT / "vendor" / "challenge" / "evaluation" / "possession_metrics.py"
 _spec = importlib.util.spec_from_file_location("possession_metrics", _VENDOR)
 pm = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pm)

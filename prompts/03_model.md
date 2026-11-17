@@ -16,3 +16,10 @@ Build the per-frame P(H, A, D) estimator, trained ONLY on degraded external trai
 3. Challenger only if time allows: a small temporal CNN/GRU on frame features, run on MPS. Keep it only if, after the shared decoder, it improves external dev spellF1.
 4. Export `predict_proba` artefacts (model files small enough to commit) and dev-set probability files for the decoder lane: `~/mtah-external/preds/<model>/<match>_<period>.npz`.
 Report dev metrics and commit IDs to the captain. Don't over-engineer: the decoder turns probabilities into spells, so calibration and the alive/dead signal matter more than per-frame accuracy.
+
+OVERNIGHT RULES (Ibrahim asleep until ~08:00 EST):
+- Never wait on him. Put questions in ~/Desktop/mtah-2027/coord/QUESTIONS.md with the default you assumed, then continue.
+- After each milestone, append one line to ~/Desktop/mtah-2027/coord/STATUS.md.
+- The captain is the Claude session running in ~/Desktop/mtah-2027 (named mtah-2027-*; use ListAgents). Message it first with your lane name, then report commit IDs and results via SendMessage. When your work order is done, ask it for the next task instead of stopping.
+- Avoid actions that need permission approval (git push, new installs); they hang overnight. Local commits are fine.
+- RESTART NOTE: an earlier session may have started this lane from the wrong folder. Check `git status`, `git log`, and ~/mtah-external/cache first, and continue from whatever exists.

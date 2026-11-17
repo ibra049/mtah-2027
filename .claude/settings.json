@@ -3,7 +3,6 @@
     "deny": [
       "Read(~/mtah-data/**)",
       "Edit(~/mtah-data/**)",
-      "Write(~/mtah-data/**)",
       "Read(//Users/ibra/mtah-data/**)",
       "Read(**/BAR-ATH_*)",
       "Read(vendor/challenge/evaluation/gt/**)",
