@@ -1,0 +1,24 @@
+{
+  "_doc": "Frame model (mtah.model): two LightGBM heads on mtah.features. Every value is chosen on external data only (leave-one-match-out over the 5 non-holdout IDSSE matches); nothing is fitted to the target.",
+  "seed": 20271117,
+
+  "_stride": "Train on every stride-th frame per sequence from a random phase. 25 fps frames are near-duplicates; several noise draws per match add more than denser sampling, and it keeps a fold within the 8 GB machine.",
+  "stride": 8,
+  "_swap_prob": "Each training row is exchanged home<->away with this probability (exact feature transform). Prediction averages both orientations, so the output is exactly team-symmetric.",
+  "swap_prob": 0.5,
+
+  "_lgb": "Conservative trees: frames of a match are correlated and the model must transfer across matches and to another tracking provider.",
+  "lgb": {
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 200,
+    "feature_fraction": 0.5,
+    "bagging_fraction": 0.7,
+    "bagging_freq": 1,
+    "lambda_l2": 10.0,
+    "max_bin": 63,
+    "num_threads": 4
+  },
+  "_rounds": "Fixed boosting rounds per head (no early stopping inside a fold, so out-of-fold predictions never see their own match).",
+  "rounds": {"dead": 400, "team": 400}
+}
