@@ -230,3 +230,18 @@ def test_submit(tmp_path):
     bad.write_text("frame,label\n" + "".join(f"{i},H\n" for i in range(n - 1)))
     assert submit.validate(str(bad), n) is not None
     assert submit.render(np.array(["h"] * n), cfg) == submit.render(codes, cfg)
+
+
+def test_tag_agreement():
+    from mtah.canonical import TAG_DTYPE
+    from mtah.check_candidate import tag_agreement
+    phase = io_target.load_config()["tag_phase"]
+    codes = np.array([0, 0, 0, 1, 2, 3, 1, 1, 1, 0], dtype=np.int8)   # H H H A D X A A A H
+    tags = np.array([(0, 4, "BUILD UP", "H", "", ""),               # alive H,H,H,A -> 3/4 agree
+                     (6, 10, "DEFENDING IN MIDDLE THIRD", "H", "", ""),  # want A: A,A,A,H -> 3/4
+                     (0, 10, "SET PIECES", "N", "", ""),            # N: ignored
+                     (0, 10, "PLAYERS IN THE BOX", "H", "", "")],   # other: ignored
+                    dtype=TAG_DTYPE)
+    out = tag_agreement(codes, tags, phase)
+    assert out["attacking"] == (4, 0.75) and out["defending"] == (4, 0.75)
+    assert out["code:BUILD_UP"] == (4, 0.75) and "code:SET_PIECES" not in out
