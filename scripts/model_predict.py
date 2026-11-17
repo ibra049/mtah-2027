@@ -28,7 +28,9 @@ def main(argv=None):
                     help="predict each match with the fold model that never saw it "
                          "(outputs/folds/<name>/<match>/), e.g. to add a new profile to oof/")
     ap.add_argument("--out-name", help="write under preds/<out-name>/ instead of preds/<name>/")
+    ap.add_argument("--predict-threads", type=int, default=4, help="does not change the output (tested)")
     args = ap.parse_args(argv)
+    model.PREDICT_THREADS = args.predict_threads
     folds = ROOT / "outputs" / "folds" / args.name
     if args.sub in ("oof", "metrica_oof") and not args.folds:
         raise SystemExit("out-of-fold files need --folds (the fold models kept by model_lomo.py)")

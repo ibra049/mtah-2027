@@ -92,6 +92,26 @@ def _gilbert(u_start, u_stop, p_start, p_stop):
     return miss
 
 
+def _fill_frames(cfg):
+    """Gap length the tracker filter will interpolate (0 when the profile has no filter). Dropout
+    is solved on the share that survives the fill, so FACT missing shares hold on the output."""
+    if cfg.get("ball_smooth_sigma_f") is None:
+        return 0
+    return int(round(cfg.get("ball_fill_gap_s", 0.0) * FPS))
+
+
+def _drop_short_runs(mask, n):
+    """mask with interior True runs of length <= n set False (what gap filling removes)."""
+    if n <= 0:
+        return mask
+    out = mask.copy()
+    m = np.r_[False, mask, False].astype(np.int8)
+    for a, b in zip(np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1)):
+        if 0 < a and b < len(mask) and b - a <= n:
+            out[a:b] = False
+    return out
+
+
 def _bisect(f, target, lo, hi, n=16):
     """f increasing; returns x with f(x) ~ target."""
     for _ in range(n):
@@ -143,7 +163,8 @@ def ball_dropout_alive(seq, rng, cfg):
 
     on = slice(None) if cfg.get("ball_target_overall") else alive
     target = cfg.get("alive_missing_frac", cfg["ball_missing_frac"])
-    base = _bisect(lambda b: (run(b) | existing)[on].mean(), target, -12.0, 2.0, n=18)
+    fill = _fill_frames(cfg)
+    base = _bisect(lambda b: _drop_short_runs(run(b) | existing, fill)[on].mean(), target, -12.0, 2.0, n=18)
     return run(base)
 
 
@@ -172,8 +193,10 @@ def ball_dropout(seq, rng, cfg):
         # long gaps in stoppages: once lost in a dead stretch the ball stays lost for most of it
         p_stop = np.where(dead, 1.0 / (cfg["ball_dead_gap_mean_s"] * FPS), p_stop)
 
+    fill = _fill_frames(cfg)
+
     def run(base, off):
-        return _gilbert(u1, u2, np.minimum(np.exp(base + logit + off * dead), 1.0), p_stop)
+        return _drop_short_runs(_gilbert(u1, u2, np.minimum(np.exp(base + logit + off * dead), 1.0), p_stop), fill)
 
     def r_of(m):
         return m[dead].mean() / max(m[~dead].mean(), 1e-6)

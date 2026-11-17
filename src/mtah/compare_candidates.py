@@ -99,6 +99,8 @@ def main(argv=None):
         "a_alive_b_dead": a_alive & ~b_alive,
         "a_dead_b_alive": ~a_alive & b_alive,
         "both_alive_team_differs": a_alive & b_alive & (a != b),
+        "both_alive_team_differs_ballobs": a_alive & b_alive & (a != b) & ball,
+        "both_alive_team_differs_ballmiss": a_alive & b_alive & (a != b) & ~ball,
     }
     # split the one-sided dead classes by the length of the dead run that frame sits in
     for side, base_name in (("b", "a_alive_b_dead"), ("a", "a_dead_b_alive")):
