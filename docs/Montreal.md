@@ -237,15 +237,18 @@ The external protocol ranks the three baseline windows as the target does, and s
 selection metric lands within 0.002 of its published target score. This is why we trust it for
 selection.
 
-| candidate | external score (DFL) | label views / profiles | harsh | paired gain | matches won | Metrica (veto set) | target decision | holdout |
+| candidate | external score (DFL, out-of-fold) | label views / profiles | harsh | paired gain | matches won | Metrica (veto set) | target decision | holdout |
 |---|---|---|---|---|---|---|---|---|
-| v1 = lgb_v1 + decoder | 0.6469 | τ = 0 / 0.5 / 1 s: 0.617 / 0.639 / 0.685 | 0.6161 | +0.405 vs smooth50 | 5 / 5 | 0.6575 | previous upload | TODO |
-| **v1q = lgb_v1 + stacker (probabilities only) + decoder** | **0.6570** (nominal) | | 0.6247 | +0.0101 vs v1 | 5 / 5 | 0.6835 (+0.0260, 3 / 3); nominal_lj 0.6914, stoppage_lj 0.7384 | **shipped** | TODO |
+| v1 = lgb_v1 + decoder | 0.6469 (DFL nominal) | τ = 0 / 0.5 / 1 s: 0.617 / 0.639 / 0.685 | 0.6161 | +0.405 vs smooth50 | 5 / 5 | 0.6575 | previous upload | TODO |
+| **v1q = lgb_v1 + stacker (probabilities only) + decoder** | **0.6570** (DFL nominal) | | 0.6247 | +0.0101 vs v1 | 5 / 5 | 0.6835 (+0.0260, 3 / 3); nominal_lj 0.6914, stoppage_lj 0.7384 | **shipped** | TODO |
 | v1p = v1 + stacker with onset input | | | | | | | rejected | |
-| v2 = lgb_v2 + decoder | 0.6786 | nominal 0.6730, stoppage 0.6842 | 0.6270 | +0.0317 vs v1 | 5 / 5 | 0.7110 | rejected | |
-| v3 = lgb_v3 + decoder | 0.6808 | | | | | | rejected | |
-| v4 = lgb_v4 (canonicalised inputs) + decoder | 0.6806 | | | | | | under evaluation | |
+| v2 = lgb_v2 + decoder | 0.6786 (select: nominal + stoppage) | nominal 0.6730, stoppage 0.6842 | 0.6270 | +0.0317 vs v1 | 5 / 5 | 0.7110 | rejected | |
+| v3 = lgb_v3 + decoder | 0.6808 (select: nominal + stoppage) | | | | | | rejected | |
+| v4 = lgb_v4 (canonicalised inputs) + decoder | 0.6806 (select: nominal + stoppage) | | | | | | under evaluation | |
 
+- **Which scores compare.** v1 and v1q have out-of-fold predictions on the nominal profile only,
+  so their scores are DFL nominal. v2–v4 also have stoppage predictions and report the selection
+  metric (mean of nominal and stoppage). Only scores of the same kind are compared.
 - **The shipped file is not the highest-scoring external model.** The label-free transfer checks
   of Section 9 decide which candidates may run on the provided tracking at all.
 - **v2 and v3 (rejected).** Both score higher externally, but on the provided tracking they
