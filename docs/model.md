@@ -142,7 +142,13 @@ the 5 out-of-fold matches, seeds 0 and 1 (`scripts/model_decode_eval.py`). Basel
 | lgb_v3 | 353: noise-relative touch streams, off-pitch filter (v3 set) | same | 0.6727 | 0.6879 | 0.6378 | ties v2 externally (+0.0006); built for transfer |
 | lgb_v4 | 391: canonical inputs (v4 set), raw m/s kinematics dropped, simple alive/dead head | nominal, stoppage, nominal_lj, stoppage_lj, harsh | 0.6701 | 0.6911 | 0.6337 | ties v2 externally (select 0.6806 vs 0.6797); low-jitter profiles 0.6867 / 0.6999 |
 
-v2, v3 and v4 rows use the decoder re-tuned on v2 (switch cost 4500). On every profile lgb_v4's
+| lgb_v4s | 404: v4 set without the per-half gap descriptors, + set-piece crowding and speed-spread cues | nominal, stoppage, harsh (one seed), nominal_lj, stoppage_lj, nominal_sm, stoppage_sm (two seeds) | 0.6631 | 0.6828 | 0.6301 | smoothed profiles 0.6579 / 0.6862 (v4: 0.6515 / 0.6836) |
+
+On the Metrica sample games (the target provider's own data, never trained on; all-5 models):
+smoothed profiles nominal_sm / stoppage_sm: lgb_v1 0.6581 / 0.6955, lgb_v4 0.6910 / 0.7311,
+lgb_v4s 0.7023 / 0.7365.
+
+v2, v3, v4 and v4s rows use the decoder re-tuned on v2 (switch cost 4500). On every profile lgb_v4's
 predicted dead-ball share is 0.458-0.465 against a true 0.463, and it emits 1.1-2.4 dead runs per
 match that contain no true dead frame (lgb_v2: 2.0-4.7).
 
