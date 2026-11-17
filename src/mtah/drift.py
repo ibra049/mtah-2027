@@ -107,29 +107,29 @@ def _external_seqs(profile):
             for m in OOF5 for sd in (0, 1) for p in (1, 2))
 
 
-def build_reference(names=None):
-    names = names or model_names()
+def build_reference(names=None, meta=MODEL_META, ref=REF):
+    names = names or model_names(meta)
     out = {"names": names, "stride": STRIDE, "matches": OOF5, "seeds": [0, 1], "quantiles": list(QS),
-           "model_meta": str(MODEL_META.relative_to(REPO)), "profiles": {}}
+           "model_meta": str(meta), "profiles": {}}
     for prof in PROFILES:
         X = feature_matrix(_external_seqs(prof), names)
         out["profiles"][prof] = stats_from_matrix(X, names)
         print(f"reference {prof}: rows={len(X)} features={len(names)}", flush=True)
         del X
-    REF.write_text(json.dumps(out, indent=1, allow_nan=True))
+    Path(ref).write_text(json.dumps(out, indent=1, allow_nan=True))
     return out
 
 
-def check_external(profile):
-    ref = json.loads(REF.read_text())
+def check_external(profile, ref_path=REF):
+    ref = json.loads(Path(ref_path).read_text())
     st = stats_from_matrix(feature_matrix(_external_seqs(profile), ref["names"]), ref["names"])
     for line in report_lines(st, ref):
         print(line)
 
 
-def target_main(data_dir):
+def target_main(data_dir, ref_path=REF):
     from . import io_target
-    ref = json.loads(REF.read_text())
+    ref = json.loads(Path(ref_path).read_text())
     seqs = io_target.load(data_dir, with_tags=False)
     st = stats_from_matrix(feature_matrix(seqs, ref["names"]), ref["names"])
     del seqs
@@ -142,14 +142,16 @@ def main(argv=None):
     ap.add_argument("--build-reference", action="store_true")
     ap.add_argument("--check-external", metavar="PROFILE")
     ap.add_argument("--target", action="store_true")
+    ap.add_argument("--model-meta", default=str(MODEL_META), help="model whose feature list is used")
+    ap.add_argument("--ref", default=str(REF), help="reference JSON (written by --build-reference)")
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA"))
     a = ap.parse_args(argv)
     if a.build_reference:
-        build_reference()
+        build_reference(meta=Path(a.model_meta), ref=Path(a.ref))
     if a.check_external:
-        check_external(a.check_external)
+        check_external(a.check_external, a.ref)
     if a.target:
-        target_main(a.data_dir)
+        target_main(a.data_dir, a.ref)
 
 
 if __name__ == "__main__":

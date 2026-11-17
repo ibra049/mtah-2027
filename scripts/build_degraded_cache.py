@@ -33,6 +33,10 @@ def build(profile, seed, match_id, period, force=False):
         # Metrica sample tracking already lacks the ball in stoppages: keep it; dropout on top is
         # solved on ALIVE frames to ball_missing_frac. The dead/alive ratio is not controlled.
         cfg["ball_target_alive"] = True
+        if profile == "stoppage":
+            # the provider's clean data IS the stoppage regime: keep its dead-ball gaps and add
+            # dropout so the OVERALL missing share is the FACT 40.7% (alive missing ~10-20%)
+            cfg["ball_target_overall"] = True
     deg, drawn = degrade.degraded_profile(seq, cfg, seed)
     miss = np.isnan(deg.ball[:, 0])
     dead = seq.y == D
@@ -52,7 +56,9 @@ def build(profile, seed, match_id, period, force=False):
             "summary": summ,
             "labels": ("Metrica event-chain labels (provider semantics, io_metrica); scoring only, not training"
                        if metrica else "clean DFL y (raw); apply relabel.min_control(y, tau)"),
-            "ball_dropout": ("clean Metrica ball gaps kept (missing in stoppages); dropout added on top so "
+            "ball_dropout": (("clean Metrica ball gaps kept; dropout added so OVERALL missing = ball_missing_frac "
+                              "(stoppage regime: alive missing low, dead missing ~98%)") if metrica and profile == "stoppage" else
+                             "clean Metrica ball gaps kept (missing in stoppages); dropout added on top so "
                              "ball missing on ball_missing_frac of ALIVE frames; dead/alive ratio not controlled"
                              if metrica else "overall missing = ball_missing_frac; dead/alive ratio drawn"),
             "seconds": round(time.time() - t, 1)}
