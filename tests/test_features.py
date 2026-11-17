@@ -527,3 +527,13 @@ def test_v4_hold_features():
     assert col["d_hold_since"][flip + 25] == pytest.approx(-1.0, abs=1e-3)
     assert col["n_hold_prev"][flip + 25] == pytest.approx(flip / 25, abs=0.05)   # home held it from frame 0
     assert col["n_hold_next"][flip - 25] == features.T_CAP_S                      # nobody after away
+
+
+def test_v4_ball_free_stoppage_cues(seq, XN4):
+    X, names = XN4
+    col = dict(zip(names, X.T))
+    assert {"n_box_max", "n_box_max_p375", "n_sp_std_rel", "n_sp_std_rel_f375", "n_coh_p375"} <= set(names)
+    # the fuller box: home's own box holds home defenders and away attackers, and vice versa
+    np.testing.assert_array_equal(
+        col["n_box_max"], np.maximum(col["h_own_box"] + col["a_opp_box"], col["h_opp_box"] + col["a_own_box"]))
+    assert (col["n_sp_std_rel"][~np.isnan(col["n_sp_std_rel"])] >= 0).all()

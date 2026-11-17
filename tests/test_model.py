@@ -246,7 +246,11 @@ def test_head_drop_keeps_features_out_of_one_head_only(train, test_seq):
     assert len(banned) > 50 and not model.head_excluded(names, cfg, "team")
     used = lambda head: {n for n, g in zip(names, art[head].feature_importance("split")) if g > 0}   # noqa: E731
     assert not (used("dead") & banned)                     # never split on in the dead head
-    assert used("team") & banned                           # still available to the team head
+    assert used("dead")                                    # ... which still trains on the rest
+    # the other heads are not restricted
+    assert "feature_contri" not in model._params(cfg, "team", names)
+    fc = model._params(cfg, "dead", names)["feature_contri"]
+    assert [n for n, w in zip(names, fc) if w == 0.0] == [n for n in names if n in banned]
     p = model.predict_proba(art, test_seq)
     np.testing.assert_allclose(model.predict_proba(art, features.swap_seq(test_seq)), p[:, [A, H, D]], atol=1e-6)
     # determinism with the gain multipliers in place
