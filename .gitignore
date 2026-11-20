@@ -33,8 +33,7 @@ coord/
 .venv
 .venv.icloud-old/
 
-# internal orchestration files (not part of the method)
-prompts/
+# local orchestration files (the work orders in prompts/ are published; see docs/WORKFLOW.md)
 coord/
 .claude/settings.json
 .claude/settings.local.json

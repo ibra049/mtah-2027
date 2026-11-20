@@ -1,10 +1,71 @@
-# Montreal: More Than A Hack 2027, frame-level possession
+# Football possession from tracking data, built in one night with a team of AI agents
 
-Team **Montreal**'s entry to the Initial Challenge. For every frame of the tactical video of
-FC Barcelona vs Athletic Club, the file gives `H` (Barcelona in possession), `A` (Athletic) or
-`D` (dead ball). The method is in [docs/Montreal.md](docs/Montreal.md).
+**62nd of 759 submissions (top 9%)** in the Initial Challenge of More Than A Hack 2027, organised
+by Metrica Sports, FC Barcelona and Mobile World Capital Barcelona. Entered as team **Montreal**.
 
-Team members: Ibrahim El Makhtoum, Sadeel Albanna, Omar Morsi, Rashid Abu Safia, Mariam Al Amad.
+Built by one person, [Ibrahim El Makhtoum](https://github.com/ibra049), in one night, by
+directing six parallel Claude Code sessions: 250 commits, about 12,900 lines of Python and 221
+tests, with the submission locked 8.5 hours after the first commit. How that worked is in
+[docs/WORKFLOW.md](docs/WORKFLOW.md).
+
+## The task
+
+For every frame of FC Barcelona vs Athletic Club, say who has the ball: `H` (Barcelona), `A`
+(Athletic) or `D` (dead ball). The input is automatic tracking data in which the ball is missing
+on 41% of the graded frames and 22 players appear as 46 anonymous track slots. No labels from
+the match could be used, and the organisers forbade uploading its data to AI services.
+
+## Results
+
+Entries were ranked on spellF1, which matches whole possessions one to one.
+
+| | spellF1 |
+|---|---|
+| **This pipeline on the competition match** (official scoreboard, 20 Nov 2026) | **0.614** |
+| Organisers' baseline on the same match | 0.243 |
+| Top-20 cutoff / first place | 0.652 / 0.710 |
+| This pipeline on two held-out Bundesliga matches with simulated tracking noise | 0.726 |
+| Organisers' baseline on the same held-out matches | 0.261 |
+
+The top 20 advanced to the next phase. This entry finished 0.038 below the cutoff.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Automatic tracking<br/>ball missing 41%"] --> B["Canonical inputs<br/>short gaps filled, tracks filtered"]
+    B --> C["391 team-symmetric<br/>features"]
+    C --> D["3 LightGBM heads<br/>dead ball, team, change onset"]
+    D --> E["Temporal stacker<br/>re-reads ±2 s"]
+    E --> F["Segment Viterbi<br/>decoder"]
+    F --> G["H / A / D<br/>per frame"]
+```
+
+- **Training without target labels.** The models learn from 7 open Bundesliga matches, degraded
+  by a noise simulator so that clean tracking looks like the automatic tracking.
+- **Label-free transfer checks.** Audits compare the provided tracking with the training data
+  without reading any ground truth. They can only refuse a candidate, and they refused two that
+  scored higher on external data.
+- **Reproducible.** One command regenerates the submitted file byte for byte.
+
+The full method, results and limitations are in [docs/Montreal.md](docs/Montreal.md), the
+technical document as submitted.
+
+## How it was built
+
+A captain session owned the interface contract, merged the work and decided what shipped. Four
+lane sessions (target I/O, external data, model, decoder) worked in separate git worktrees, each
+from a written work order. A watchdog session resumed them after pauses. A hook kept the
+competition data out of every agent's context. A valid fallback submission existed 42 minutes
+after the first commit, and a model beating the official baseline after 69 minutes.
+
+The setup, the timeline of the night, the decisions the agents made without me and what went
+wrong are in [docs/WORKFLOW.md](docs/WORKFLOW.md). The work orders are in [prompts/](prompts).
+
+The repository as submitted on 17 November 2026 is tagged `submission-2026-11-17`. Later commits
+add this description and the work orders; the pipeline is unchanged.
+
+## What is in this repository
 
 This repository holds **code only**:
 - No competition data.
@@ -122,5 +183,7 @@ document, "Rule compliance").
   - `submit`, `predict`: writing the file.
 - `configs/`: every setting used to produce a file.
 - `scripts/`: external-data pipelines, evaluation and release checks.
-- `docs/`: technical document and evidence notes.
+- `docs/`: technical document, evidence notes, and how the project was built (`WORKFLOW.md`).
+- `prompts/`: the work orders given to the agent sessions.
+- `CLAUDE.md`, `.claude/hooks/`: the rules every session read and the data guard.
 - `third_party/mtah_challenge/`: unmodified official `possession_metrics.py` and `games.py` (MIT).
